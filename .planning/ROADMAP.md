@@ -32,7 +32,17 @@
   3. Operator can pull live VRAM totals/free/per-process metrics from `dcgm-exporter` (port 9400) during inference.
   4. Operator can run the documented smoke-load (2 concurrent 8k-token chats + 1 long Whisper) and observe sustained VRAM usage ≤21 GB with `max_model_len=16384` enforced.
   5. Operator can issue a tool-call request to the LLM server and receive a well-formed tool call (Qwen 3.5 27B patched template validated).
-**Plans:** TBD
+**Plans:** 9 plans
+Plans:
+- [ ] 01-01-PLAN.md — Repo scaffolding + Go monorepo + Ifix conventions (POD-01)
+- [ ] 01-02-PLAN.md — Qwen 3.5 27B tool-calling Jinja template (community patched, pinned by SHA-256) (POD-05)
+- [ ] 01-03-PLAN.md — Pod Dockerfile + docker-compose (5 services, GPU share, healthchecks) (POD-01, POD-02, POD-04, POD-06)
+- [ ] 01-04-PLAN.md — Health-bridge Go service (port 9100, 10s probe loop, per-upstream state) (POD-03)
+- [ ] 01-05-PLAN.md — Vast.ai onstart.sh — MinIO weight download + SHA-256 + docker compose up (POD-02)
+- [ ] 01-06-PLAN.md — Smoke-test (asyncio benchmark + report schema + D-19 gate enforcement) (POD-06, POD-07)
+- [ ] 01-07-PLAN.md — GitHub Actions build-pod.yml — build + push ghcr.io/ifixtelecom/ifix-ai-pod (POD-01)
+- [ ] 01-08-PLAN.md — GitHub Actions smoke.yml — Vast.ai pod lifecycle + D-19 gate enforcement (POD-07)
+- [ ] 01-09-PLAN.md — Operator runbook — MinIO weight upload + pod operation + baseline archival (POD-02)
 **Research hint:** yes (Qwen tool-calling template patch, Q4_K_M vs Q5_K_M tradeoff, empirical VRAM ceiling)
 **UI hint:** no
 
@@ -156,7 +166,7 @@
   3. A second chaos drill simulates OpenRouter unavailability during failover and the system degrades deterministically (queues, OpenAI fallback, or controlled failure) — no silent corruption.
   4. A runbook document covers detection → diagnosis → rollback → postmortem for the five most-likely incident classes; on-call operator executes one scenario from the runbook successfully.
   5. The dashboard is reachable at a HTTPS URL behind admin authentication (Better Auth or SSO); `gateway.ifix.com.br` resolves via Cloudflare with valid TLS.
-  6. LGPD review sign-off is attached to the repo and all sensitive tenants have confirmed privacy-policy disclosures listing OpenAI/OpenRouter/Vast.ai as sub-processors.
+  6. LGPD review sign-off is attached to the repo and all sensitive tenants have confirmed privacy-policy disclosures listing OpenAI/OpenRouter/Vast.ai as sub-processadores.
 **Plans:** TBD
 **Research hint:** no (execution phase — no open research)
 **UI hint:** yes
@@ -167,7 +177,7 @@
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. GPU Pod Image & Smoke-Test | 0/? | Not started | - |
+| 1. GPU Pod Image & Smoke-Test | 0/9 | Plans ready | - |
 | 2. Gateway Core + Multi-tenant Auth | 0/? | Not started | - |
 | 3. Resilience & Fallback Chain | 0/? | Not started | - |
 | 4. Multi-tenant Quotas, Billing & Schedule Routing | 0/? | Not started | - |
@@ -201,3 +211,4 @@
 ---
 
 *Roadmap created: 2026-04-17*
+*Phase 1 plans created: 2026-04-17*
