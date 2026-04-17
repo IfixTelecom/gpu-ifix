@@ -156,13 +156,82 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| (Populated during roadmap creation) | | |
+| POD-01 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| POD-02 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| POD-03 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| POD-04 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| POD-05 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| POD-06 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| POD-07 | Phase 1: GPU Pod Image & Smoke-Test | Pending |
+| GW-01 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-02 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-03 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-04 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-05 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-06 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-07 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-08 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-09 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-10 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| TEN-01 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| TEN-02 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| TEN-03 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
+| TEN-04 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
+| TEN-05 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
+| TEN-06 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
+| TEN-07 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
+| TEN-08 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| TEN-09 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| RES-01 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-02 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-03 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-04 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-05 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-06 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-07 | Phase 3: Resilience & Fallback Chain | Pending |
+| RES-08 | Phase 3: Resilience & Fallback Chain | Pending |
+| LSH-01 | Phase 5: Load Shedding | Pending |
+| LSH-02 | Phase 5: Load Shedding | Pending |
+| LSH-03 | Phase 5: Load Shedding | Pending |
+| LSH-04 | Phase 5: Load Shedding | Pending |
+| LSH-05 | Phase 5: Load Shedding | Pending |
+| PRV-01 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-02 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-03 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-04 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-05 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-06 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-07 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-08 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-09 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| PRV-10 | Phase 6: Auto-provisioning Emergency Pod | Pending |
+| OBS-01 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-02 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-03 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-04 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-05 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-06 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-07 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| OBS-08 | Phase 7: Observability — Dashboard & Alerting | Pending |
+| INT-01 | Phase 8: Client Integration — ConverseAI + Chat Ifix | Pending |
+| INT-02 | Phase 8: Client Integration — ConverseAI + Chat Ifix | Pending |
+| INT-03 | Phase 9: Client Integration — Sensitive Tenants | Pending |
+| INT-04 | Phase 9: Client Integration — Sensitive Tenants | Pending |
+| INT-05 | Phase 9: Client Integration — Sensitive Tenants | Pending |
+| INT-06 | Phase 10: Production Hardening & GA | Pending |
+| PRD-01 | Phase 10: Production Hardening & GA | Pending |
+| PRD-02 | Phase 10: Production Hardening & GA | Pending |
+| PRD-03 | Phase 10: Production Hardening & GA | Pending |
+| PRD-04 | Phase 10: Production Hardening & GA | Pending |
+| PRD-05 | Phase 10: Production Hardening & GA | Pending |
+| PRD-06 | Phase 10: Production Hardening & GA | Pending |
+| PRD-07 | Phase 10: Production Hardening & GA | Pending |
 
 **Coverage:**
-- v1 requirements: 62 total
-- Mapped to phases: (populated during roadmap creation)
-- Unmapped: (populated during roadmap creation)
+- v1 requirements: 70 total
+- Mapped to phases: 70 (100%)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-17*
-*Last updated: 2026-04-17 after initial definition*
+*Last updated: 2026-04-17 after roadmap creation (traceability populated)*
