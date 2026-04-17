@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-17T23:29:00.000Z"
+last_updated: "2026-04-17T23:37:00.000Z"
 progress:
   total_phases: 10
   completed_phases: 0
   total_plans: 9
-  completed_plans: 6
+  completed_plans: 7
   percent: 0
 ---
 
@@ -28,10 +28,10 @@ progress:
 ## Current Position
 
 Phase: 1 (GPU Pod Image & Smoke-Test) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 
-- **Phase:** Phase 1 (Waves 1-3 complete: 01-01..01-06)
-- **Plan:** Wave 4 next (01-07: GHA build-pod.yml)
+- **Phase:** Phase 1 (Waves 1-4 complete: 01-01..01-07)
+- **Plan:** Wave 5 next (01-08 smoke.yml — CHECKPOINT: requires Vast.ai + MinIO API keys)
 - **Status:** Executing Phase 1
 - **Progress:** `[──────────]` 0/10 phases complete (0%)
 
