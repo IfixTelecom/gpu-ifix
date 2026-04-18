@@ -24,24 +24,38 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/audit"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/models"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/proxy"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/redisx"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/upstreams"
 )
 
 // proxies bundles the three reverse proxies mounted under /v1/*. Any nil
 // field falls back to the scaffold 501 handler so existing scaffold tests
 // (nil verifier + nil proxies) keep passing. Production main always
 // supplies all three.
+//
+// Plan 02-05 fields:
+//   - auditWriter: when non-nil, audit.Middleware is mounted on the
+//     authed /v1/* group. nil → middleware skipped (test variant).
+//   - resolver: when non-nil, chat + embeddings are wrapped in
+//     models.Handler for alias rewriting. nil → proxy runs directly.
+//   - upstreamsHealth: when non-nil, overrides the /v1/health/upstreams
+//     scaffold 501 with the real aggregator handler.
 type proxies struct {
-	chat  http.Handler
-	embed http.Handler
-	audio http.Handler
+	chat            http.Handler
+	embed           http.Handler
+	audio           http.Handler
+	auditWriter     *audit.Writer
+	resolver        *models.Resolver
+	upstreamsHealth http.Handler
 }
 
 func main() {
@@ -133,11 +147,35 @@ func main() {
 
 	verifier := auth.NewVerifier(pool, rdb, log, touchBuf)
 
+	// Audit writer — async buffered flusher (Plan 02-05). Run exits on ctx
+	// cancel after draining the channel. Non-blocking Enqueue on the hot
+	// path; drops are observable via gateway_audit_dropped_total.
+	auditWriter := audit.NewWriter(pool, log)
+	go auditWriter.Run(ctx)
+
+	// AuditInterceptor: plugs into ProxyResponseInterceptor chain for SSE
+	// capture. onDisconnect fires when TeeBody.Close() runs (normal close,
+	// client abort, upstream 5xx mid-stream, buffer cap — see Failure-mode
+	// table in 02-05-PLAN.md). Codex review [HIGH/MEDIUM] 02-05.
+	auditInterceptor := audit.NewAuditInterceptor(auditWriter, func(requestID string) {
+		log.Debug("audit interceptor on-close", "request_id", requestID)
+	}, log)
+
+	// Model alias resolver (Plan 02-05). Initial refresh is fail-fast so
+	// operators catch schema/seed problems at boot, not at request time.
+	resolver := models.NewResolver(pool, log)
+	if err := resolver.Refresh(ctx); err != nil {
+		log.Error("model resolver initial refresh failed", "err", err)
+		os.Exit(2)
+	}
+	resolver.Start(ctx)
+
 	// Build the three reverse proxies (Plan 02-04). Interceptors are passed
 	// at construction time per Codex review [HIGH/MEDIUM] 02-05 decoupling.
-	// Plan 02-04 passes none (no hooks active yet); Plan 02-05 wires its
-	// audit.NewAuditInterceptor(...) into the variadic slot here.
-	chatRP, err := proxy.NewChatProxy(cfg.UpstreamLLMURL, log)
+	// Chat gets the audit interceptor (SSE streaming); embeddings + audio
+	// never stream so their non-SSE bodies are captured by audit.Middleware
+	// directly.
+	chatRP, err := proxy.NewChatProxy(cfg.UpstreamLLMURL, log, auditInterceptor)
 	if err != nil {
 		log.Error("build chat proxy", "err", err)
 		os.Exit(2)
@@ -155,9 +193,12 @@ func main() {
 
 	startedAt := time.Now()
 	r := buildRouter(log, startedAt, verifier, proxies{
-		chat:  chatRP,
-		embed: embedRP,
-		audio: audioRP,
+		chat:            chatRP,
+		embed:           embedRP,
+		audio:           audioRP,
+		auditWriter:     auditWriter,
+		resolver:        resolver,
+		upstreamsHealth: upstreams.NewHealthHandler(cfg.UpstreamHealthBridgeURL, log),
 	})
 
 	srv := &http.Server{
@@ -208,8 +249,12 @@ func main() {
 //
 // proxies fields may also be nil (test variant); nil fields fall back to
 // scaffold 501 so the main_test.go scaffold assertions keep passing.
-// Plan 02-04 wires real proxies in production main; /v1/health/upstreams
-// stays scaffold 501 until Plan 02-05.
+// Plan 02-04 wired real proxies in production main. Plan 02-05 adds:
+//   - audit.Middleware on the authed /v1/* group (when px.auditWriter
+//     non-nil)
+//   - models.Handler wrapping chat + embeddings for alias rewrite (when
+//     px.resolver non-nil)
+//   - Real /v1/health/upstreams handler (when px.upstreamsHealth non-nil)
 func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier, px proxies) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(httpx.RequestID)
@@ -232,6 +277,20 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 		if verifier != nil {
 			pg.Use(auth.Middleware(verifier, log))
 		}
+		if px.auditWriter != nil {
+			pg.Use(audit.Middleware(px.auditWriter, log))
+		}
+		// Wrap chat + embed with model rewrite when a resolver is present.
+		chatHandler := px.chat
+		embedHandler := px.embed
+		if px.resolver != nil {
+			if chatHandler != nil {
+				chatHandler = models.Handler(px.resolver, "llm", chatHandler)
+			}
+			if embedHandler != nil {
+				embedHandler = models.Handler(px.resolver, "embed", embedHandler)
+			}
+		}
 		mount := func(method, route string, h http.Handler) {
 			if h == nil {
 				pg.MethodFunc(method, route, scaffoldNotImplemented)
@@ -239,11 +298,14 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 			}
 			pg.Method(method, route, h)
 		}
-		mount(http.MethodPost, "/v1/chat/completions", px.chat)
-		mount(http.MethodPost, "/v1/embeddings", px.embed)
+		mount(http.MethodPost, "/v1/chat/completions", chatHandler)
+		mount(http.MethodPost, "/v1/embeddings", embedHandler)
 		mount(http.MethodPost, "/v1/audio/transcriptions", px.audio)
-		// /v1/health/upstreams is scaffold until Plan 02-05.
-		pg.MethodFunc(http.MethodGet, "/v1/health/upstreams", scaffoldNotImplemented)
+		if px.upstreamsHealth != nil {
+			pg.Method(http.MethodGet, "/v1/health/upstreams", px.upstreamsHealth)
+		} else {
+			pg.MethodFunc(http.MethodGet, "/v1/health/upstreams", scaffoldNotImplemented)
+		}
 		// GET scaffold on the 3 POST routes (keeps existing 501
 		// semantics for non-POST methods on the proxied paths).
 		pg.MethodFunc(http.MethodGet, "/v1/chat/completions", scaffoldNotImplemented)
