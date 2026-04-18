@@ -31,5 +31,23 @@ var AuditDroppedTotal = promauto.NewCounter(
 	},
 )
 
+// ApikeyTouchBufferedTotal counts Verify-path enqueues into TouchBuffer.
+// Codex review [MEDIUM] 02-03 — debounced last_used_at updates.
+var ApikeyTouchBufferedTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "gateway_apikey_touch_buffered_total",
+		Help: "Total api_key touch enqueues into the debounced buffer.",
+	},
+)
+
+// ApikeyTouchFlushTotal counts flush cycles (not individual UPDATEs).
+// Codex review [MEDIUM] 02-03.
+var ApikeyTouchFlushTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "gateway_apikey_touch_flush_total",
+		Help: "Total flush cycles of the debounced api_key touch buffer.",
+	},
+)
+
 // Handler returns the /metrics endpoint handler.
 func Handler() http.Handler { return promhttp.Handler() }

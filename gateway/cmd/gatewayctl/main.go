@@ -1,16 +1,19 @@
 // Binary gatewayctl is the admin CLI for the gateway. Plan 02-01
-// installs the dispatcher + subcommand stubs; Plans 02-02 (migrate),
-// 02-03 (tenant/key), and 02-09 (audit export) implement the real
-// subcommand logic.
+// installed the dispatcher + subcommand stubs; Plan 02-03 implements
+// the real migrate/tenant/key subcommands. Plan 02-09 will land the
+// audit export subcommand.
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
 )
 
@@ -21,9 +24,9 @@ Usage:
   gatewayctl <command> [flags]
 
 Commands:
-  migrate           Apply or revert Postgres migrations (Plan 02-02).
-  tenant            Create and list tenants (Plan 02-03).
-  key               Create and revoke API keys (Plan 02-03).
+  migrate           Apply or revert Postgres migrations.
+  tenant            Create and list tenants.
+  key               Create and revoke API keys.
   audit             Export audit-log partitions to MinIO cold storage (Plan 02-09).
 
 Use "gatewayctl <command> --help" for subcommand flags.
@@ -38,16 +41,19 @@ func main() {
 	cmd, args := os.Args[1], os.Args[2:]
 
 	log := newCLILogger()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	switch cmd {
 	case "migrate":
-		runMigrate(args, log)
+		os.Exit(runMigrate(ctx, args, log))
 	case "tenant":
-		runTenant(args, log)
+		os.Exit(runTenant(ctx, args, log))
 	case "key":
-		runKey(args, log)
+		os.Exit(runKey(ctx, args, log))
 	case "audit":
-		runAudit(args, log)
+		fmt.Fprintln(os.Stderr, "gatewayctl audit: not yet implemented (Plan 02-09)")
+		os.Exit(1)
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -58,37 +64,17 @@ func main() {
 	}
 }
 
-// Subcommand stubs. Each owns a FlagSet so --help produces subcommand
-// help without the top-level usage.
-
-func runMigrate(args []string, log *slog.Logger) {
-	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
-	_ = fs.String("dir", "up", "up | down | status (implemented in Plan 02-02)")
-	_ = fs.Parse(args)
-	log.Info("gatewayctl migrate: stub — implemented in Plan 02-02")
-}
-
-func runTenant(args []string, log *slog.Logger) {
-	fs := flag.NewFlagSet("tenant", flag.ExitOnError)
-	_ = fs.String("name", "", "tenant display name")
-	_ = fs.String("slug", "", "tenant slug (url-safe)")
-	_ = fs.Parse(args)
-	log.Info("gatewayctl tenant: stub — implemented in Plan 02-03")
-}
-
-func runKey(args []string, log *slog.Logger) {
-	fs := flag.NewFlagSet("key", flag.ExitOnError)
-	_ = fs.String("tenant", "", "tenant slug to associate with")
-	_ = fs.String("data-class", "normal", "normal | sensitive (CONTEXT.md D-A4)")
-	_ = fs.Parse(args)
-	log.Info("gatewayctl key: stub — implemented in Plan 02-03")
-}
-
-func runAudit(args []string, log *slog.Logger) {
-	fs := flag.NewFlagSet("audit", flag.ExitOnError)
-	_ = fs.String("month", "", "YYYY-MM partition to export (Plan 02-09)")
-	_ = fs.Parse(args)
-	log.Info("gatewayctl audit: stub — implemented in Plan 02-09")
+// loadAndPool is shared across migrate/tenant/key. Caller MUST defer pool.Close().
+func loadAndPool(ctx context.Context, _ *slog.Logger) (config.Config, *pgxpool.Pool, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	pool, err := db.NewPool(ctx, cfg)
+	if err != nil {
+		return config.Config{}, nil, err
+	}
+	return cfg, pool, nil
 }
 
 func newCLILogger() *slog.Logger {
@@ -104,7 +90,3 @@ func newCLILogger() *slog.Logger {
 	}
 	return slog.New(httpx.NewRedactor(inner)).With("module", "GATEWAYCTL")
 }
-
-// Silence unused-import warnings during the scaffold phase — config will
-// be used by migrate/tenant/key/audit in later plans.
-var _ = config.Load

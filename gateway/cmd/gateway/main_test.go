@@ -22,7 +22,9 @@ import (
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil)).With("module", "GATEWAY_TEST")
-	return buildRouter(log, time.Now())
+	// nil verifier → /v1/* group skips auth.Middleware (test-only path).
+	// Production main always supplies a real verifier.
+	return buildRouter(log, time.Now(), nil)
 }
 
 func TestHealth_200(t *testing.T) {

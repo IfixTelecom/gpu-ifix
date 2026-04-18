@@ -1,8 +1,8 @@
 // Binary gateway serves OpenAI-compatible endpoints fronted by
 // multi-tenant authentication, per-request audit logging, idempotency
-// keys, and a reverse proxy to the Phase 1 pod. Scaffold only in Plan
-// 02-01 — DB, auth, audit, idempotency, and proxy wiring are added by
-// Plans 02-02..02-06.
+// keys, and a reverse proxy to the Phase 1 pod. Plan 02-03 wires the
+// pgxpool + Redis client + auth middleware. Audit, idempotency, and
+// proxy land in 02-04..02-06.
 package main
 
 import (
@@ -20,10 +20,17 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/redisx"
 )
 
 func main() {
@@ -34,8 +41,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize Sentry FIRST so panics during startup also fly to Sentry.
-	// Sentry.Init is safe to call before logger is built (it does its own logging).
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gateway: config error: %v\n", err)
@@ -43,7 +48,6 @@ func main() {
 	}
 	if err := obs.Init(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "gateway: sentry init: %v\n", err)
-		// Continue — Sentry is best-effort observability.
 	}
 	defer obs.Flush(2 * time.Second)
 
@@ -69,8 +73,57 @@ func main() {
 		cancel()
 	}()
 
+	// Postgres pool — fail-fast. Required for auth + audit.
+	pool, err := db.NewPool(ctx, cfg)
+	if err != nil {
+		log.Error("db pool init failed", "err", err)
+		os.Exit(2)
+	}
+	defer pool.Close()
+
+	// Optional boot-time migration (CONTEXT.md D-D1 — applied at boot OR via
+	// gatewayctl). Default off; ops decide via env.
+	if os.Getenv("AI_GATEWAY_MIGRATE_ON_BOOT") == "true" {
+		if err := db.Up(ctx, pool); err != nil {
+			log.Error("migrate up at boot failed", "err", err)
+			os.Exit(2)
+		}
+		log.Info("migrations applied on boot")
+	}
+
+	// Partition automation (Plan 02-02 Task 3 + Codex review [LOW] 02-02).
+	// Runs after migrations so the parent partitioned tables exist.
+	if err := db.EnsurePartitions(ctx, pool, time.Now(), db.DefaultPartitionLookahead); err != nil {
+		log.Error("ensure partitions failed", "err", err)
+		os.Exit(2)
+	}
+
+	// Redis — fail-fast. Required for auth cache + idempotency (Plan 02-06).
+	rdb, err := redisx.NewClient(ctx, cfg)
+	if err != nil {
+		log.Error("redis init failed", "err", err)
+		os.Exit(2)
+	}
+	defer rdb.Close()
+
+	// TouchBuffer: debounced last_used_at updates (Codex review [MEDIUM] 02-03).
+	// flushFn uses a SEPARATE short-lived context so shutdown drains via
+	// Run ctx cancel propagation but each UPDATE has its own 3s deadline.
+	touchFlush := func(fctx context.Context, id uuid.UUID) error {
+		return gen.New(pool).TouchKeyLastUsed(fctx, id)
+	}
+	touchBuf := auth.NewTouchBuffer(touchFlush, auth.DefaultTouchFlushInterval, log,
+		obs.ApikeyTouchBufferedTotal.Inc,
+		obs.ApikeyTouchFlushTotal.Inc,
+	)
+	tbCtx, tbCancel := context.WithCancel(ctx)
+	go touchBuf.Run(tbCtx)
+	defer tbCancel() // triggers final flush on shutdown
+
+	verifier := auth.NewVerifier(pool, rdb, log, touchBuf)
+
 	startedAt := time.Now()
-	r := buildRouter(log, startedAt)
+	r := buildRouter(log, startedAt, verifier)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -110,19 +163,20 @@ func main() {
 }
 
 // buildRouter assembles the chi router + middleware stack and mounts the
-// Phase-2 scaffold routes. Extracted so main_test.go can exercise the exact
-// same wiring without duplicating setup.
-func buildRouter(log *slog.Logger, startedAt time.Time) *chi.Mux {
+// /health, /metrics, and /v1/* scaffold routes. /v1/* is wrapped in an
+// auth-protected chi.Group; /health and /metrics stay unauthenticated.
+// Extracted so main_test.go can exercise the exact same wiring.
+//
+// verifier may be nil for the test variant — in that case the auth group
+// is replaced with a passthrough so existing scaffold tests keep working
+// without booting Redis/Postgres. Production main always supplies a verifier.
+func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(httpx.RequestID)
 	r.Use(httpx.Logger(log))
 	r.Use(httpx.Recoverer(log))
 
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		// Inline JSON encode — no local helper. We deliberately do NOT add
-		// a writeJSON helper to httpx because /health is the only consumer
-		// and its shape differs from the OpenAI error envelope.
-		// (Codex review [LOW] 02-01 — avoid duplication with httpx.envelope.)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -133,18 +187,21 @@ func buildRouter(log *slog.Logger, startedAt time.Time) *chi.Mux {
 	})
 	r.Handle("/metrics", obs.Handler())
 
-	// Stub the core OpenAI routes so clients hitting them before later
-	// plans land get a predictable 501 OpenAI envelope, not a chi 404/405.
-	// These handlers are REPLACED by Plan 02-04.
-	for _, route := range []string{
-		"/v1/chat/completions",
-		"/v1/embeddings",
-		"/v1/audio/transcriptions",
-		"/v1/health/upstreams",
-	} {
-		r.MethodFunc(http.MethodPost, route, scaffoldNotImplemented)
-		r.MethodFunc(http.MethodGet, route, scaffoldNotImplemented)
-	}
+	// Authenticated /v1/* group. Scaffolds remain 501 until Plan 02-04 lands proxies.
+	r.Group(func(pg chi.Router) {
+		if verifier != nil {
+			pg.Use(auth.Middleware(verifier, log))
+		}
+		for _, route := range []string{
+			"/v1/chat/completions",
+			"/v1/embeddings",
+			"/v1/audio/transcriptions",
+			"/v1/health/upstreams",
+		} {
+			pg.MethodFunc(http.MethodPost, route, scaffoldNotImplemented)
+			pg.MethodFunc(http.MethodGet, route, scaffoldNotImplemented)
+		}
+	})
 
 	// Any other path also returns an OpenAI envelope (not chi's default 404).
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
@@ -162,11 +219,12 @@ func scaffoldNotImplemented(w http.ResponseWriter, _ *http.Request) {
 		"This route will be wired by subsequent Phase 2 plans.")
 }
 
-// NOTE: previously this file defined a local `writeJSON` helper; it was
-// removed after Codex review [LOW] 02-01 (duplication with httpx/envelope).
-// /health encodes inline; every 4xx/5xx path goes through httpx.WriteOpenAIError.
-// DO NOT reintroduce a JSON helper here. If a future non-error handler needs
-// one, add it to `gateway/internal/httpx/` with a dedicated shape comment.
+// Compile-time assertion that pgxpool/redis are imported (used inside main).
+// Keeps imports honest if main is restructured.
+var (
+	_ = (*pgxpool.Pool)(nil)
+	_ = (*redis.Client)(nil)
+)
 
 // newLogger builds the slog.Logger wrapped in the Redactor so sensitive
 // attribute values are globally redacted (D-B7).
