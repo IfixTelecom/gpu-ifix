@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-18T19:30:00.000Z"
+last_updated: "2026-04-18T22:03:51.974Z"
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 18
-  completed_plans: 9
-  percent: 10
+  completed_plans: 11
+  percent: 61
 ---
 
 # STATE: ifix-ai-gateway
@@ -27,13 +27,13 @@ progress:
 
 ## Current Position
 
-Phase: 2 (Gateway Core + Multi-tenant Auth) — READY TO EXECUTE
-Plan: 9 plans staged in 7 waves
+Phase: 02 (gateway-core-multi-tenant-auth) — EXECUTING
+Plan: 1 of 9
 
 - **Phase:** Phase 2 planning complete — `02-PATTERNS.md` (40 files mapped) + 9 `02-NN-PLAN.md` files committed. Checker iteration 1 surfaced 2 blockers (depends_on on 02-04; audit replay flag propagation B2) + 3 warnings (wave consistency on 02-09; fmtSscan stub in 02-05; broken goose placeholder in 02-02) + 1 info (itoa helper in 02-04). All 6 fixes applied. Integration_04b regression test added in 02-07 asserting `SELECT idempotency_replayed FROM ai_gateway.audit_log` after replay.
 - **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex (Gemini/OpenCode/Qwen/Cursor/CodeRabbit missing; Claude skipped for independence). `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans across 2 iterations: SHA-256 `key_lookup_hash` column + negative cache formalizes D-A2 (closes auth hot-path DoS); `ProxyResponseInterceptor` formal extension in 02-04 used by 02-05 tee (closes audit/proxy coupling + goroutine leak risk with `goleak.VerifyNone`); Redis `SET NX EX` first-writer-wins + 30s wait budget + 409/422 branches in 02-06 (closes idempotency race); 02-09 demoted `optional: true` + `requirements: []` (GW-10 fully covered by 02-02); 02-01 `go.mod` trimmed to 4 direct deps; 02-02 gains `db.EnsurePartitions` boot hook + `cmd/gateway/main.go` call. Plan-checker PASSED on iter-2; no CONTEXT.md decisions overridden.
 - **Plan:** run `/gsd-execute-phase 2` next (recommend `/clear` first; waves 1-2 are autonomous; wave 7 `02-08-PLAN.md` is `autonomous: false` — requires human-verify on first live Portainer deploy).
-- **Status:** Phase 2 plans ready; execution pending
+- **Status:** Executing Phase 02
 - **Progress:** `[█─────────]` 1/10 phases complete (10%)
 
 ## Performance Metrics
@@ -59,6 +59,8 @@ Plan: 9 plans staged in 7 waves
 
 ### Open Todos (for upcoming phases)
 
+- [ ] Phase 3: Revisit per-route WriteTimeout (chat=0 for SSE, embeddings=30s, audio=120s) to restore slow-client-DoS defense on non-streaming routes (introduced by 02-01 config.go; acceptable for Phase 2 because Phase 4 adds rate-limiting)
+- [ ] Phase 4: Wire request instrumentation middleware that calls `obs.RequestsTotal.WithLabelValues(route, status).Inc()` on the proxy layer (02-04 responsibility; the counter is already registered by 02-01)
 - [ ] Phase 1 HUMAN-UAT: Validate Qwen 3.5 27B patched Jinja template on real Vast.ai pod (tool-call correctness — blocked on smoke.yml run)
 - [ ] Phase 1 HUMAN-UAT: Empirical VRAM ceiling under load (2×8k-token chats + 1 long Whisper — blocked on smoke.yml run)
 - [ ] Phase 1 HUMAN-UAT: Cold-start ≤5 min on fresh Vast.ai 4090 (blocked on smoke.yml run)
