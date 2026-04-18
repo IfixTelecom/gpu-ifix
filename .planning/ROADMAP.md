@@ -56,7 +56,7 @@ Plans:
   3. Every request is traceable end-to-end: a unique `X-Request-ID` header is returned, logs carry the same ID, and a row lands in `audit_log` Postgres table.
   4. An API key carries a `data_class` (`normal` | `sensitive`) that downstream policies can read from the authenticated request context.
   5. The gateway deploys via the standard Ifix flow (GitHub → Actions → Portainer webhook) on the dedicated 4 vCPU VPS and model aliases (client sends `model: "qwen"`) resolve to the current primary model.
-**Plans:** TBD
+**Plans:** 3/9 plans executed
 **Research hint:** no (Go + chi + pgx + go-redis is well-trodden; schema design is standard)
 **UI hint:** no
 
@@ -178,7 +178,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. GPU Pod Image & Smoke-Test | 9/9 | Complete (human_needed) | 2026-04-18 |
-| 2. Gateway Core + Multi-tenant Auth | 0/? | Not started | - |
+| 2. Gateway Core + Multi-tenant Auth | 3/9 | In Progress|  |
 | 3. Resilience & Fallback Chain | 0/? | Not started | - |
 | 4. Multi-tenant Quotas, Billing & Schedule Routing | 0/? | Not started | - |
 | 5. Load Shedding | 0/? | Not started | - |
