@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-18T22:33:15.044Z"
+last_updated: "2026-04-18T23:45:00.000Z"
 progress:
   total_phases: 10
   completed_phases: 1
   total_plans: 18
-  completed_plans: 12
-  percent: 67
+  completed_plans: 15
+  percent: 83
 ---
 
 # STATE: ifix-ai-gateway
@@ -28,19 +28,20 @@ progress:
 ## Current Position
 
 Phase: 02 (gateway-core-multi-tenant-auth) — EXECUTING
-Plan: 1 of 9
+Plan: 5 of 9 complete (Wave 4 done)
 
-- **Phase:** Phase 2 planning complete — `02-PATTERNS.md` (40 files mapped) + 9 `02-NN-PLAN.md` files committed. Checker iteration 1 surfaced 2 blockers (depends_on on 02-04; audit replay flag propagation B2) + 3 warnings (wave consistency on 02-09; fmtSscan stub in 02-05; broken goose placeholder in 02-02) + 1 info (itoa helper in 02-04). All 6 fixes applied. Integration_04b regression test added in 02-07 asserting `SELECT idempotency_replayed FROM ai_gateway.audit_log` after replay.
-- **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex (Gemini/OpenCode/Qwen/Cursor/CodeRabbit missing; Claude skipped for independence). `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans across 2 iterations: SHA-256 `key_lookup_hash` column + negative cache formalizes D-A2 (closes auth hot-path DoS); `ProxyResponseInterceptor` formal extension in 02-04 used by 02-05 tee (closes audit/proxy coupling + goroutine leak risk with `goleak.VerifyNone`); Redis `SET NX EX` first-writer-wins + 30s wait budget + 409/422 branches in 02-06 (closes idempotency race); 02-09 demoted `optional: true` + `requirements: []` (GW-10 fully covered by 02-02); 02-01 `go.mod` trimmed to 4 direct deps; 02-02 gains `db.EnsurePartitions` boot hook + `cmd/gateway/main.go` call. Plan-checker PASSED on iter-2; no CONTEXT.md decisions overridden.
-- **Plan:** run `/gsd-execute-phase 2` next (recommend `/clear` first; waves 1-2 are autonomous; wave 7 `02-08-PLAN.md` is `autonomous: false` — requires human-verify on first live Portainer deploy).
+- **Phase:** Phase 2 execution in progress. Waves 1–4 complete (02-01..02-05). 02-05 delivered async audit writer + SSE tee via ProxyResponseInterceptor (decoupled from ReverseProxy internals per Codex [HIGH/MEDIUM]), model alias resolver with composite (alias, upstream) key (Codex [MEDIUM]), structured Whisper JSON parser (Codex [HIGH]), and /v1/health/upstreams aggregator with 5s cache. `goleak.VerifyNone` regression guard passes for mid-SSE client disconnect. 22 unit tests added, all green under `-race`.
+- **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex (Gemini/OpenCode/Qwen/Cursor/CodeRabbit missing; Claude skipped for independence). `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans across 2 iterations. All 02-05 Codex concerns resolved at implementation time (see 02-05-SUMMARY.md).
+- **Plan:** next wave is 02-06 (idempotency middleware — Redis SET NX EX first-writer-wins + 30s wait budget). 02-05 exported `audit.IdempotencyReplayedSetter` interface for 02-06 to signal replays.
 - **Status:** Executing Phase 02
-- **Progress:** [███████░░░] 67%
+- **Progress:** [████████░░] 83%
 
 ## Performance Metrics
 
 - **Phases completed:** 1 / 10
-- **Plans completed:** 9 / 18 (9 executed in Phase 1 + 9 staged in Phase 2)
+- **Plans completed:** 15 / 18 (9 in Phase 1 + 5 executed in Phase 2 waves 1–4 + 1 optional staging plan)
 - **v1 requirements covered by plans:** 21 / 70 (POD-01..POD-07 from Phase 1 + GW-01..GW-10, TEN-01, TEN-02, TEN-08, TEN-09 newly planned in Phase 2)
+- **Plan 02-05:** duration 820s, 2 tasks, 14 files created, 1 file modified, 28 tests added
 
 ## Accumulated Context
 
@@ -77,8 +78,8 @@ None at present. Roadmap is ready for planning.
 
 ## Session Continuity
 
-- **Last session:** 2026-04-18T22:33:05.510Z
-- **Next session should:** Run `/clear` then `/gsd-execute-phase 2` to execute Phase 2 plans (9 plans, 7 waves). Wave 1 `02-01-PLAN.md` (scaffold) + `02-02-PLAN.md` (schema+sqlc) run first in parallel. Wave 7 `02-08-PLAN.md` (Dockerfile + build-gateway.yml + Portainer stack) is `autonomous: false` — human-verify first live deploy. Separately, set up GH Secrets + MinIO per `.planning/MINIO-SETUP.md` and run `smoke.yml` workflow_dispatch to close Phase 1 HUMAN-UAT items.
+- **Last session:** 2026-04-18T23:45:00.000Z
+- **Next session should:** Continue `/gsd-execute-phase 2` with Wave 5 (02-06 idempotency middleware). 02-05 exported `audit.IdempotencyReplayedSetter` interface for the replay-path flag propagation; 02-06 type-asserts the ResponseWriter and calls `SetIdempotencyReplayed(true)` on replays. 02-07 will then integration-test the `SELECT idempotency_replayed FROM ai_gateway.audit_log` assertion end-to-end. Wave 7 `02-08-PLAN.md` (Dockerfile + build-gateway.yml + Portainer stack) is `autonomous: false` — human-verify first live deploy.
 
 ---
 
