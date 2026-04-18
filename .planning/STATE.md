@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-18T00:43:00.000Z"
+last_updated: "2026-04-18T00:50:00.000Z"
 progress:
   total_phases: 10
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 9
   completed_plans: 9
-  percent: 0
+  percent: 10
 ---
 
 # STATE: ifix-ai-gateway
@@ -27,19 +27,19 @@ progress:
 
 ## Current Position
 
-Phase: 1 (GPU Pod Image & Smoke-Test) — VERIFYING
-Plan: 9 of 9 ✓
+Phase: 2 (Gateway Core + Multi-tenant Auth) — NEXT
+Plan: — (not started)
 
-- **Phase:** Phase 1 (all 6 waves complete: 01-01..01-09)
-- **Plan:** Phase verification pending (gsd-verifier)
-- **Status:** Phase 1 content-complete, awaiting verification
-- **Progress:** `[──────────]` 0/10 phases complete (0%)
+- **Phase:** Phase 1 COMPLETE (human_needed on 2/5 runtime tests — see 01-HUMAN-UAT.md)
+- **Plan:** Phase 2 planning pending — run `/gsd-discuss-phase 2` or `/gsd-plan-phase 2`
+- **Status:** Between phases (Phase 1 closed, Phase 2 not yet started)
+- **Progress:** `[█─────────]` 1/10 phases complete (10%)
 
 ## Performance Metrics
 
-- **Phases completed:** 0 / 10
-- **Plans completed:** 0 / 0 (plans TBD per phase)
-- **v1 requirements covered by plans:** 0 / 70
+- **Phases completed:** 1 / 10
+- **Plans completed:** 9 / 9 (Phase 1)
+- **v1 requirements covered by plans:** 7 / 70 (POD-01..POD-07 — runtime validation on 3 items pending in 01-HUMAN-UAT.md)
 
 ## Accumulated Context
 
@@ -54,12 +54,13 @@ Plan: 9 of 9 ✓
 - LLM model: Qwen 3.5 27B Q4_K_M GGUF, fixed both primary and OpenRouter fallback
 - Deploy: Docker Compose + Portainer + webhook GitHub (standard Ifix)
 - Postgres: shared DO cluster with dedicated `ai_gateway` schema
-- Pre-baked pod Docker image (`ghcr.io/ifixtelecom/ifix-ai-pod`) with weights embedded — NOT re-download on provision
+- Pre-baked pod Docker image (`ghcr.io/ifixtelecom/ifix-ai-pod`, slim ~2 GB) with weights downloaded from Ifix MinIO at boot via `onstart.sh` (revised by Phase 1 per D-01/D-02/D-04 — image stays small, weights versioned by key path with SHA-256 integrity D-05)
 
 ### Open Todos (for upcoming phases)
 
-- [ ] Phase 1: Validate Qwen 3.5 27B patched Jinja template against upstream
-- [ ] Phase 1: Empirical VRAM ceiling under load (2×8k-token chats + 1 long Whisper)
+- [ ] Phase 1 HUMAN-UAT: Validate Qwen 3.5 27B patched Jinja template on real Vast.ai pod (tool-call correctness — blocked on smoke.yml run)
+- [ ] Phase 1 HUMAN-UAT: Empirical VRAM ceiling under load (2×8k-token chats + 1 long Whisper — blocked on smoke.yml run)
+- [ ] Phase 1 HUMAN-UAT: Cold-start ≤5 min on fresh Vast.ai 4090 (blocked on smoke.yml run)
 - [ ] Phase 3: Confirm OpenRouter upstream provider for Qwen 3.5 27B (Together? Fireworks? DeepInfra?)
 - [ ] Phase 5: Tune saturation thresholds (inflight N, P95 ms, VRAM GB) from Phase 1 baseline
 - [ ] Phase 6: Timeboxed (3h) Vast.ai REST API spike before committing the phase scope
@@ -73,8 +74,8 @@ None at present. Roadmap is ready for planning.
 
 ## Session Continuity
 
-- **Last session:** 2026-04-17T21:39:49.161Z
-- **Next session should:** Run `/gsd-plan-phase 1` to decompose Phase 1 (GPU Pod Image & Smoke-Test) into executable plans.
+- **Last session:** 2026-04-18T00:50:00Z
+- **Next session should:** Run `/gsd-discuss-phase 2` (recommended) or `/gsd-plan-phase 2` to begin Phase 2 (Gateway Core + Multi-tenant Auth). Separately, set up GH Secrets + MinIO per `.planning/MINIO-SETUP.md` and run `smoke.yml` workflow_dispatch to close Phase 1 HUMAN-UAT items.
 
 ---
 

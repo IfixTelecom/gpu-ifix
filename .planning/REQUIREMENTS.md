@@ -9,13 +9,13 @@ Requirements para o release inicial. Cada item mapeia para um phase do roadmap.
 
 ### Infra — Inference Pod (GPU)
 
-- [ ] **POD-01**: Imagem Docker `ghcr.io/ifixtelecom/ifix-ai-pod` construída e publicada com llama.cpp (llama-server CUDA), Speaches (Whisper large-v3), Infinity (BGE-M3) e dcgm-exporter
-- [ ] **POD-02**: Imagem magra (~2 GB) publicada em `ghcr.io/ifixtelecom/ifix-ai-pod`; weights (Qwen 3.5 27B Q4_K_M GGUF, Whisper large-v3, BGE-M3) baixados do MinIO Ifix via `onstart.sh` no boot do pod — cold-start ≤5 min (decisões D-01, D-02, D-04; integridade validada via SHA-256 por D-05)
-- [ ] **POD-03**: Health-bridge no pod expõe `/health` por modelo (LLM, STT, embed) com verificação real (latency test), não só container-running
-- [ ] **POD-04**: Pod mede e expõe VRAM total, livre, por processo via dcgm-exporter na porta 9400
-- [ ] **POD-05**: Template Jinja patched para Qwen 3.5 27B (tool-calling funcional, sem bug de role "developer") validado em smoke-test
-- [ ] **POD-06**: `max_model_len=16384` enforçado no llama.cpp para conter crescimento de KV cache
-- [ ] **POD-07**: Smoke-test sob carga (2 chats concorrentes 8k tokens + 1 Whisper longa) confirma margem ≥3 GB VRAM sob pico
+- [x] **POD-01**: Imagem Docker `ghcr.io/ifixtelecom/ifix-ai-pod` construída e publicada com llama.cpp (llama-server CUDA), Speaches (Whisper large-v3), Infinity (BGE-M3) e dcgm-exporter (Phase 1)
+- [x] **POD-02**: Imagem magra (~2 GB) publicada em `ghcr.io/ifixtelecom/ifix-ai-pod`; weights (Qwen 3.5 27B Q4_K_M GGUF, Whisper large-v3, BGE-M3) baixados do MinIO Ifix via `onstart.sh` no boot do pod — cold-start ≤5 min (decisões D-01, D-02, D-04; integridade validada via SHA-256 por D-05) (Phase 1 — runtime validation pending HUMAN-UAT)
+- [x] **POD-03**: Health-bridge no pod expõe `/health` por modelo (LLM, STT, embed) com verificação real (latency test), não só container-running (Phase 1)
+- [x] **POD-04**: Pod mede e expõe VRAM total, livre, por processo via dcgm-exporter na porta 9400 (Phase 1)
+- [x] **POD-05**: Template Jinja patched para Qwen 3.5 27B (tool-calling funcional, sem bug de role "developer") validado em smoke-test (Phase 1 — runtime validation pending HUMAN-UAT)
+- [x] **POD-06**: `max_model_len=16384` enforçado no llama.cpp para conter crescimento de KV cache (Phase 1)
+- [x] **POD-07**: Smoke-test sob carga (2 chats concorrentes 8k tokens + 1 Whisper longa) confirma margem ≥3 GB VRAM sob pico (Phase 1 — runtime validation pending HUMAN-UAT)
 
 ### Gateway — Core HTTP (Go)
 

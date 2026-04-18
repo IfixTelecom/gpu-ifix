@@ -177,7 +177,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. GPU Pod Image & Smoke-Test | 9/9 | Pending verification | - |
+| 1. GPU Pod Image & Smoke-Test | 9/9 | Complete (human_needed) | 2026-04-18 |
 | 2. Gateway Core + Multi-tenant Auth | 0/? | Not started | - |
 | 3. Resilience & Fallback Chain | 0/? | Not started | - |
 | 4. Multi-tenant Quotas, Billing & Schedule Routing | 0/? | Not started | - |
