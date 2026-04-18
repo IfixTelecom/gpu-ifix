@@ -10,7 +10,7 @@ Requirements para o release inicial. Cada item mapeia para um phase do roadmap.
 ### Infra — Inference Pod (GPU)
 
 - [ ] **POD-01**: Imagem Docker `ghcr.io/ifixtelecom/ifix-ai-pod` construída e publicada com llama.cpp (llama-server CUDA), Speaches (Whisper large-v3), Infinity (BGE-M3) e dcgm-exporter
-- [ ] **POD-02**: Imagem inclui weights embutidos (Qwen 3.5 27B Q4_K_M GGUF, Whisper large-v3, BGE-M3) para cold-start ≤5 min na Vast.ai
+- [ ] **POD-02**: Imagem magra (~2 GB) publicada em `ghcr.io/ifixtelecom/ifix-ai-pod`; weights (Qwen 3.5 27B Q4_K_M GGUF, Whisper large-v3, BGE-M3) baixados do MinIO Ifix via `onstart.sh` no boot do pod — cold-start ≤5 min (decisões D-01, D-02, D-04; integridade validada via SHA-256 por D-05)
 - [ ] **POD-03**: Health-bridge no pod expõe `/health` por modelo (LLM, STT, embed) com verificação real (latency test), não só container-running
 - [ ] **POD-04**: Pod mede e expõe VRAM total, livre, por processo via dcgm-exporter na porta 9400
 - [ ] **POD-05**: Template Jinja patched para Qwen 3.5 27B (tool-calling funcional, sem bug de role "developer") validado em smoke-test
