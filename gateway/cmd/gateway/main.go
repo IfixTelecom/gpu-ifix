@@ -30,6 +30,7 @@ import (
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/idempotency"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/models"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/proxy"
@@ -56,6 +57,7 @@ type proxies struct {
 	auditWriter     *audit.Writer
 	resolver        *models.Resolver
 	upstreamsHealth http.Handler
+	idemStore       *idempotency.Store
 }
 
 func main() {
@@ -191,6 +193,11 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Idempotency store (Plan 02-06). Shares the same Redis client as auth
+	// cache; keys live under `gw:idem:<tenant>:<key>` with SET NX EX
+	// first-writer-wins semantics + 24h TTL post-completion.
+	idemStore := idempotency.NewStore(rdb)
+
 	startedAt := time.Now()
 	r := buildRouter(log, startedAt, verifier, proxies{
 		chat:            chatRP,
@@ -199,6 +206,7 @@ func main() {
 		auditWriter:     auditWriter,
 		resolver:        resolver,
 		upstreamsHealth: upstreams.NewHealthHandler(cfg.UpstreamHealthBridgeURL, log),
+		idemStore:       idemStore,
 	})
 
 	srv := &http.Server{
@@ -290,6 +298,13 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 			if embedHandler != nil {
 				embedHandler = models.Handler(px.resolver, "embed", embedHandler)
 			}
+		}
+		// Idempotency middleware (Plan 02-06) wraps ONLY chat (D-C4 — not
+		// embeddings, not audio). Runs AFTER auth + audit (needs tenant_id
+		// scope, type-asserts the audit writer for the replay flag) and
+		// BEFORE the proxy (intercepts request/response).
+		if px.idemStore != nil && chatHandler != nil {
+			chatHandler = idempotency.Middleware(px.idemStore, log)(chatHandler)
 		}
 		mount := func(method, route string, h http.Handler) {
 			if h == nil {
