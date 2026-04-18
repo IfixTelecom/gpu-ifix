@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"bytes"
+	"bufio"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -89,6 +89,18 @@ func TestChatProxy_NonStreamingJSONRoundTrip(t *testing.T) {
 }
 
 func TestChatProxy_SSEStreamingFlushesPerChunk(t *testing.T) {
+	// Upstream writes 3 SSE chunks with 80ms sleep between them.
+	// With FlushInterval:-1 set on the reverse proxy, each upstream Flush
+	// causes the gateway to immediately forward the bytes to the client.
+	// We read line-by-line using bufio.Reader.ReadBytes('\n'), which blocks
+	// until at least one newline arrives — guaranteeing per-chunk
+	// observation timestamps when the stream is truly flushed (not
+	// buffered). If the gateway buffered, ReadBytes would return all lines
+	// together at the end after total ~250ms, with near-zero gap between
+	// observations. Deviation [Rule 1 - Bug]: the plan's fixed 128-byte
+	// Read loop was flaky on localhost loopback because the kernel can
+	// coalesce rapid flushed writes into a single Read; line-oriented
+	// reading is the correct way to assert per-chunk arrival.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -100,7 +112,7 @@ func TestChatProxy_SSEStreamingFlushesPerChunk(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			_, _ = w.Write([]byte("data: {\"chunk\":" + strconv.Itoa(i) + "}\n\n"))
 			flusher.Flush()
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(80 * time.Millisecond)
 		}
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		flusher.Flush()
@@ -126,16 +138,19 @@ func TestChatProxy_SSEStreamingFlushesPerChunk(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var chunkTimes []time.Time
-	rd := bytes.NewBuffer(nil)
-	buf := make([]byte, 128)
+	// Line-oriented read: ReadBytes('\n') returns as soon as one
+	// newline-terminated chunk arrives. With FlushInterval:-1 this fires
+	// 6 times (3 data lines + 3 blank separators) during the stream, plus
+	// 2 more for [DONE]. We record timestamps of the first-byte-lines
+	// (data:) to measure inter-chunk gaps.
+	br := bufio.NewReader(resp.Body)
+	var dataLineTimes []time.Time
 	start := time.Now()
 	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			rd.Write(buf[:n])
-			chunkTimes = append(chunkTimes, time.Now())
-			if strings.Contains(rd.String(), "[DONE]") {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 && strings.HasPrefix(string(line), "data:") {
+			dataLineTimes = append(dataLineTimes, time.Now())
+			if strings.Contains(string(line), "[DONE]") {
 				break
 			}
 		}
@@ -144,19 +159,23 @@ func TestChatProxy_SSEStreamingFlushesPerChunk(t *testing.T) {
 		}
 	}
 	total := time.Since(start)
-	if total > 500*time.Millisecond {
-		t.Errorf("stream total duration %v — upstream emits over ~150ms + transit; test budget 500ms", total)
+	// Upstream writes 3 inter-chunk sleeps of 80ms + final [DONE] = ~240ms.
+	// Add generous 500ms slack for CI jitter. Total budget: 800ms.
+	if total > 800*time.Millisecond {
+		t.Errorf("stream total duration %v exceeds 800ms budget", total)
 	}
-	if len(chunkTimes) < 2 {
-		t.Errorf("only observed %d read events — expected streaming to produce at least 2", len(chunkTimes))
+	if len(dataLineTimes) < 2 {
+		t.Fatalf("only observed %d data-line reads — expected streaming to produce >= 4 (3 chunks + [DONE])", len(dataLineTimes))
 	}
-	if len(chunkTimes) >= 2 {
-		gap := chunkTimes[len(chunkTimes)-1].Sub(chunkTimes[0])
-		if gap < 30*time.Millisecond {
-			t.Errorf("gap between first and last chunk observation: %v — looks buffered, not streamed", gap)
-		}
-		t.Logf("SSE stream observation gap: %v (>=30ms expected)", gap)
+	// Gap between the first observed data line and the last observed
+	// data line must reflect the upstream sleeps. If the gateway buffered,
+	// all lines would arrive simultaneously at the end, producing near-0
+	// gap.
+	gap := dataLineTimes[len(dataLineTimes)-1].Sub(dataLineTimes[0])
+	if gap < 80*time.Millisecond {
+		t.Errorf("gap between first and last chunk observation: %v — looks buffered, not streamed (want >=80ms)", gap)
 	}
+	t.Logf("SSE stream per-chunk observation gap: %v (upstream emitted 3 chunks @ 80ms apart, [DONE] after last)", gap)
 }
 
 func TestChatProxy_UpstreamUnreachable502Envelope(t *testing.T) {
@@ -221,7 +240,10 @@ func TestChatProxy_ToolCallingPassThrough(t *testing.T) {
 	req, _ := http.NewRequest("POST", gateway.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"qwen","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{}}}],"tool_choice":"auto"}`))
 	req.Header.Set("Content-Type", "application/json")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	var out openai.ChatCompletionResponse
 	_ = json.NewDecoder(resp.Body).Decode(&out)

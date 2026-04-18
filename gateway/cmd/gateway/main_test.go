@@ -23,8 +23,9 @@ func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil)).With("module", "GATEWAY_TEST")
 	// nil verifier → /v1/* group skips auth.Middleware (test-only path).
-	// Production main always supplies a real verifier.
-	return buildRouter(log, time.Now(), nil)
+	// Empty proxies → POST scaffold 501 preserved (test-only path).
+	// Production main always supplies a real verifier + proxies.
+	return buildRouter(log, time.Now(), nil, proxies{})
 }
 
 func TestHealth_200(t *testing.T) {

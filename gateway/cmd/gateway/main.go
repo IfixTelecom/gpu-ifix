@@ -30,8 +30,19 @@ import (
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/proxy"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/redisx"
 )
+
+// proxies bundles the three reverse proxies mounted under /v1/*. Any nil
+// field falls back to the scaffold 501 handler so existing scaffold tests
+// (nil verifier + nil proxies) keep passing. Production main always
+// supplies all three.
+type proxies struct {
+	chat  http.Handler
+	embed http.Handler
+	audio http.Handler
+}
 
 func main() {
 	selfCheck := flag.Bool("self-check", false, "exit 0 immediately (docker healthcheck)")
@@ -122,8 +133,32 @@ func main() {
 
 	verifier := auth.NewVerifier(pool, rdb, log, touchBuf)
 
+	// Build the three reverse proxies (Plan 02-04). Interceptors are passed
+	// at construction time per Codex review [HIGH/MEDIUM] 02-05 decoupling.
+	// Plan 02-04 passes none (no hooks active yet); Plan 02-05 wires its
+	// audit.NewAuditInterceptor(...) into the variadic slot here.
+	chatRP, err := proxy.NewChatProxy(cfg.UpstreamLLMURL, log)
+	if err != nil {
+		log.Error("build chat proxy", "err", err)
+		os.Exit(2)
+	}
+	embedRP, err := proxy.NewEmbeddingsProxy(cfg.UpstreamEmbedURL, log)
+	if err != nil {
+		log.Error("build embeddings proxy", "err", err)
+		os.Exit(2)
+	}
+	audioRP, err := proxy.NewAudioProxy(cfg.UpstreamSTTURL, log)
+	if err != nil {
+		log.Error("build audio proxy", "err", err)
+		os.Exit(2)
+	}
+
 	startedAt := time.Now()
-	r := buildRouter(log, startedAt, verifier)
+	r := buildRouter(log, startedAt, verifier, proxies{
+		chat:  chatRP,
+		embed: embedRP,
+		audio: audioRP,
+	})
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
@@ -163,14 +198,19 @@ func main() {
 }
 
 // buildRouter assembles the chi router + middleware stack and mounts the
-// /health, /metrics, and /v1/* scaffold routes. /v1/* is wrapped in an
+// /health, /metrics, and /v1/* routes. /v1/* is wrapped in an
 // auth-protected chi.Group; /health and /metrics stay unauthenticated.
 // Extracted so main_test.go can exercise the exact same wiring.
 //
 // verifier may be nil for the test variant — in that case the auth group
 // is replaced with a passthrough so existing scaffold tests keep working
 // without booting Redis/Postgres. Production main always supplies a verifier.
-func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier) *chi.Mux {
+//
+// proxies fields may also be nil (test variant); nil fields fall back to
+// scaffold 501 so the main_test.go scaffold assertions keep passing.
+// Plan 02-04 wires real proxies in production main; /v1/health/upstreams
+// stays scaffold 501 until Plan 02-05.
+func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier, px proxies) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(httpx.RequestID)
 	r.Use(httpx.Logger(log))
@@ -187,20 +227,29 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier)
 	})
 	r.Handle("/metrics", obs.Handler())
 
-	// Authenticated /v1/* group. Scaffolds remain 501 until Plan 02-04 lands proxies.
+	// Authenticated /v1/* group.
 	r.Group(func(pg chi.Router) {
 		if verifier != nil {
 			pg.Use(auth.Middleware(verifier, log))
 		}
-		for _, route := range []string{
-			"/v1/chat/completions",
-			"/v1/embeddings",
-			"/v1/audio/transcriptions",
-			"/v1/health/upstreams",
-		} {
-			pg.MethodFunc(http.MethodPost, route, scaffoldNotImplemented)
-			pg.MethodFunc(http.MethodGet, route, scaffoldNotImplemented)
+		mount := func(method, route string, h http.Handler) {
+			if h == nil {
+				pg.MethodFunc(method, route, scaffoldNotImplemented)
+				return
+			}
+			pg.Method(method, route, h)
 		}
+		mount(http.MethodPost, "/v1/chat/completions", px.chat)
+		mount(http.MethodPost, "/v1/embeddings", px.embed)
+		mount(http.MethodPost, "/v1/audio/transcriptions", px.audio)
+		// /v1/health/upstreams is scaffold until Plan 02-05.
+		pg.MethodFunc(http.MethodGet, "/v1/health/upstreams", scaffoldNotImplemented)
+		// GET scaffold on the 3 POST routes (keeps existing 501
+		// semantics for non-POST methods on the proxied paths).
+		pg.MethodFunc(http.MethodGet, "/v1/chat/completions", scaffoldNotImplemented)
+		pg.MethodFunc(http.MethodGet, "/v1/embeddings", scaffoldNotImplemented)
+		pg.MethodFunc(http.MethodGet, "/v1/audio/transcriptions", scaffoldNotImplemented)
+		pg.MethodFunc(http.MethodPost, "/v1/health/upstreams", scaffoldNotImplemented)
 	})
 
 	// Any other path also returns an OpenAI envelope (not chi's default 404).
