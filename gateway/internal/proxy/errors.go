@@ -12,6 +12,24 @@ import (
 // when httputil.ReverseProxy's internal dial/roundtrip fails.
 var ErrUpstreamUnreachable = errors.New("proxy: upstream unreachable")
 
+// ErrSensitiveRetryExhausted is returned after 3× exp-backoff attempts
+// (CONTEXT.md D-B1) when the primary breaker never returned to CLOSED.
+// Maps to HTTP 503 with envelope code "upstream_unavailable_for_sensitive_tenant"
+// + Retry-After: 30 header per D-B2.
+var ErrSensitiveRetryExhausted = errors.New("proxy: sensitive retry exhausted")
+
+// ErrToolCallPartialStream is raised when the SSE ModifyResponse tee
+// detects "tool_calls" in the first 8KB then the upstream disconnects
+// mid-stream (CONTEXT.md RES-06, SC-4). Gateway MUST NOT failover;
+// emits a terminal SSE error event with code "tool_call_partial_stream"
+// (HTTP 502 envelope for non-streaming tool calls).
+var ErrToolCallPartialStream = errors.New("proxy: tool call partial stream")
+
+// ErrContextLengthExceeded is raised by tokencount.go pre-dispatch when
+// input_tokens > 16384 (chat) or > 8192 (embed BGE-M3 native cap).
+// Maps to HTTP 400 with envelope code "context_length_exceeded" per RES-07.
+var ErrContextLengthExceeded = errors.New("proxy: context length exceeded")
+
 // ErrorHandler returns a ReverseProxy ErrorHandler that emits a 502
 // with the OpenAI error envelope and logs the cause + request id.
 func ErrorHandler(upstreamName string, log *slog.Logger) func(http.ResponseWriter, *http.Request, error) {
