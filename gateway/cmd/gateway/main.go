@@ -115,6 +115,11 @@ func main() {
 			log.Error("migrate up at boot failed", "err", err)
 			os.Exit(2)
 		}
+		// Reset pool so future AfterConnect calls register the now-created
+		// ai_gateway.{api_key_status,data_class} ENUM types for sqlc scans.
+		// Without this, pre-migration connections have no registered ENUM
+		// codecs and sqlc's `interface{}` scan targets error at query time.
+		pool.Reset()
 		log.Info("migrations applied on boot")
 	}
 
