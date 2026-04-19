@@ -21,6 +21,9 @@ type Querier interface {
 	GetActiveKeyByLookupHash(ctx context.Context, keyLookupHash []byte) (GetActiveKeyByLookupHashRow, error)
 	GetModelAlias(ctx context.Context, alias string) (AiGatewayModelAlias, error)
 	GetTenantBySlug(ctx context.Context, slug string) (AiGatewayTenant, error)
+	// Used by gatewayctl upstreams update/enable/disable to verify the name
+	// exists before mutating.
+	GetUpstreamByName(ctx context.Context, name string) (AiGatewayUpstream, error)
 	// key_lookup_hash is the SHA-256 (raw bytes) of the full raw key. Computed by
 	// auth.GenerateAPIKey in 02-03; stored indexed for fast lookup on the hot path
 	// (Codex review [HIGH] 02-03).
@@ -38,13 +41,34 @@ type Querier interface {
 	// path uses GetActiveKeyByLookupHash, which hits the UNIQUE index and returns
 	// at most one row (Codex review [HIGH] 02-03).
 	ListActiveKeysByTenant(ctx context.Context, tenantID uuid.UUID) ([]ListActiveKeysByTenantRow, error)
+	// Admin surface (gatewayctl upstreams list). Returns every row regardless
+	// of enabled state so the operator can re-enable disabled upstreams.
+	ListAllUpstreams(ctx context.Context) ([]AiGatewayUpstream, error)
+	// Hot-path load at boot and on LISTEN/NOTIFY (CONTEXT.md D-D2). Returns
+	// all enabled rows ordered by (role, tier) so the Loader can
+	// deterministically build tier-0/tier-1 maps.
+	ListEnabledUpstreams(ctx context.Context) ([]AiGatewayUpstream, error)
 	ListModelAliases(ctx context.Context) ([]AiGatewayModelAlias, error)
 	ListTenants(ctx context.Context) ([]AiGatewayTenant, error)
 	RevokeAPIKey(ctx context.Context, id uuid.UUID) error
+	// Shortcut for enable/disable subcommands.
+	SetUpstreamEnabled(ctx context.Context, arg SetUpstreamEnabledParams) error
 	// NOT called per-request by 02-03 (Codex review [MEDIUM] 02-03 — TouchKeyLastUsed
 	// is debounced via an in-memory buffer flushing every 60s or on shutdown). This
 	// sqlc query remains the low-level write path used by that buffer.
 	TouchKeyLastUsed(ctx context.Context, id uuid.UUID) error
+	// Called by gatewayctl upstreams update <name> --tier=N --enabled=true
+	// --circuit-failures=5. Triggers NOTIFY via notify_upstreams_changed() (migration 0009)
+	// which the listen goroutine consumes to reload config.
+	// Fields passed as NULL are left unchanged (COALESCE). Explicit ::int / ::boolean
+	// casts force sqlc to generate nullable pgtype.Int4 / pgtype.Bool params so the
+	// caller can pass NULL via the typed wrappers (CONTEXT.md D-D2 / Pattern admin CLI).
+	UpdateUpstreamAdmin(ctx context.Context, arg UpdateUpstreamAdminParams) error
+	// Written by the probe goroutine every probe cycle (CONTEXT.md D-A2).
+	// Batched via buffered channel + 1s flush (see gateway/internal/upstreams/probe.go).
+	// Trigger 0009_upstreams_notify_trigger.sql does NOT fire on this UPDATE because
+	// the WHEN clause only watches config columns (Pitfall 7).
+	UpdateUpstreamProbe(ctx context.Context, arg UpdateUpstreamProbeParams) error
 }
 
 var _ Querier = (*Queries)(nil)
