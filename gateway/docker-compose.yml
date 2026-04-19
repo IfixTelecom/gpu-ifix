@@ -1,0 +1,52 @@
+# Ifix AI Gateway — Portainer stack template.
+#
+# Deploy target: Portainer stack `ai-gateway-dev` / `ai-gateway-prod`
+# managed at portainer3.ifixtelecom.com.br. Env vars are populated in
+# the Portainer stack UI; this file uses ${VAR} interpolation ONLY.
+#
+# Schema migrations: the gateway binary runs goose.Up on boot when
+# AI_GATEWAY_MIGRATE_ON_BOOT=true (CONTEXT.md D-D1). Flip to false after
+# the first successful deploy to save ~100ms of startup.
+
+services:
+  gateway:
+    image: ghcr.io/ifixtelecom/ifix-ai-gateway:${TAG:-latest-dev}
+    container_name: ifix-ai-gateway
+    environment:
+      TZ: America/Sao_Paulo
+      GATEWAY_PORT: 8080
+      ENV: ${ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Data layer (shared DO Postgres + shared Redis Ifix)
+      AI_GATEWAY_PG_DSN: ${AI_GATEWAY_PG_DSN}
+      AI_GATEWAY_PG_MAX_CONNS: ${AI_GATEWAY_PG_MAX_CONNS:-10}
+      AI_GATEWAY_REDIS_ADDR: ${AI_GATEWAY_REDIS_ADDR}
+      AI_GATEWAY_REDIS_PASSWORD: ${AI_GATEWAY_REDIS_PASSWORD:-}
+      # Upstreams (Phase 1 pod)
+      UPSTREAM_LLM_URL: ${UPSTREAM_LLM_URL}
+      UPSTREAM_STT_URL: ${UPSTREAM_STT_URL}
+      UPSTREAM_EMBED_URL: ${UPSTREAM_EMBED_URL}
+      UPSTREAM_HEALTH_BRIDGE_URL: ${UPSTREAM_HEALTH_BRIDGE_URL}
+      # Observability
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      # Bootstrap
+      BOOTSTRAP_TENANT_SLUG: ${BOOTSTRAP_TENANT_SLUG:-converseai}
+      # Boot-time migrations (flip off after first prod deploy)
+      AI_GATEWAY_MIGRATE_ON_BOOT: ${AI_GATEWAY_MIGRATE_ON_BOOT:-true}
+    ports:
+      - "8080:8080"
+    networks:
+      - traefik-public
+    restart: unless-stopped
+    healthcheck:
+      # /gateway --self-check is a free syscall-ish check; /health needs
+      # DB + Redis reachable which is validated on first real request.
+      test: ["CMD", "/gateway", "--self-check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+networks:
+  traefik-public:
+    external: true

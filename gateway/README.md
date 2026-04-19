@@ -67,3 +67,49 @@ lista os nomes que faltam em `stderr`.
 
 Subcomandos implementados gradualmente em 02-02 (migrate), 02-03 (tenant/
 key), 02-09 (audit).
+
+## Deploy
+
+### Dev (automatic on push to `develop`)
+
+1. Commit + push to `develop`: `git push origin develop`
+2. Actions workflow `build-gateway.yml` runs test → integration test → build → push image to GHCR (`develop`, `develop-{sha}`, `latest-dev`) → curls Portainer webhook `PORTAINER_WEBHOOK_URL_DEV_GATEWAY`
+3. Portainer stack `ai-gateway-dev` pulls new image + recreates container
+4. Verify: `curl https://<dev-vps>:8080/health` → `{"status":"ok", ...}`
+
+### Prod (automatic on push to `main`)
+
+Same as dev but with `main` tags + `PORTAINER_WEBHOOK_URL_PROD_GATEWAY`.
+
+### Stable release (manual)
+
+1. Merge to `main`
+2. Tag: `git tag v1.0.0 && git push origin v1.0.0`
+3. Actions builds + pushes `v1.0.0`, `latest`, `v1.0.0-{sha}` to GHCR
+4. Update Portainer stack env `TAG=v1.0.0` → redeploy
+
+### Admin operations on a running container
+
+```bash
+# Apply new migrations (also runs at boot when AI_GATEWAY_MIGRATE_ON_BOOT=true)
+docker exec -it ifix-ai-gateway /gatewayctl migrate up
+
+# Create a tenant and key
+docker exec -it ifix-ai-gateway /gatewayctl tenant create --name "Cobranças" --slug cobrancas
+docker exec -it ifix-ai-gateway /gatewayctl key create --tenant cobrancas --data-class sensitive
+
+# Revoke a key
+docker exec -it ifix-ai-gateway /gatewayctl key revoke <uuid>
+```
+
+### GitHub Secrets required
+
+- `PORTAINER_WEBHOOK_URL_DEV_GATEWAY`
+- `PORTAINER_WEBHOOK_URL_PROD_GATEWAY`
+
+### Portainer stack env vars (set in Portainer UI, NOT in git)
+
+- `AI_GATEWAY_PG_DSN`, `AI_GATEWAY_REDIS_ADDR`, `AI_GATEWAY_REDIS_PASSWORD`
+- `UPSTREAM_LLM_URL`, `UPSTREAM_STT_URL`, `UPSTREAM_EMBED_URL`, `UPSTREAM_HEALTH_BRIDGE_URL`
+- `SENTRY_DSN`, `ENV=production`, `TAG=develop` (dev) / `TAG=v1.0.0` (prod)
+- `AI_GATEWAY_MIGRATE_ON_BOOT=true` on first deploy, flip to `false` afterwards

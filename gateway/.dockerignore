@@ -1,0 +1,24 @@
+# Planning + docs (exclude from docker context for faster builds)
+.planning/
+docs/
+*.md
+!gateway/README.md
+
+# Node / JS artifacts (monorepo peers)
+node_modules/
+dist/
+.next/
+
+# Test fixtures + scratch
+*_test.go
+**/testdata/
+.coverage/
+coverage.out
+
+# Local secrets
+.env
+.env.*
+
+# VCS
+.git/
+.gitignore
