@@ -34,6 +34,7 @@ type Config struct {
 	PGMaxConns     int32  // AI_GATEWAY_PG_MAX_CONNS (default 10)
 	RedisAddr      string // AI_GATEWAY_REDIS_ADDR (required, host:port)
 	RedisPassword  string // AI_GATEWAY_REDIS_PASSWORD (optional)
+	RedisDB        int    // AI_GATEWAY_REDIS_DB (default 0; pick 1-15 to isolate from shared Redis)
 	RedisKeyPrefix string // fixed "gw:" (CONTEXT.md Integration Points)
 
 	// Upstreams
@@ -70,6 +71,7 @@ func Load() (Config, error) {
 		PGMaxConns:     int32(atoiOr(os.Getenv("AI_GATEWAY_PG_MAX_CONNS"), 10)),
 		RedisAddr:      os.Getenv("AI_GATEWAY_REDIS_ADDR"),
 		RedisPassword:  os.Getenv("AI_GATEWAY_REDIS_PASSWORD"),
+		RedisDB:        atoiOr(os.Getenv("AI_GATEWAY_REDIS_DB"), 0),
 		RedisKeyPrefix: "gw:",
 
 		UpstreamLLMURL:          os.Getenv("UPSTREAM_LLM_URL"),
