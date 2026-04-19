@@ -39,8 +39,8 @@ Requirements para o release inicial. Cada item mapeia para um phase do roadmap.
 - [ ] **TEN-05**: Modo de operação configurável por tenant: `24/7` (sempre local primário) OU `peak` (08-22h local, fora de horário OpenRouter)
 - [ ] **TEN-06**: Token counting + custo calculado por request e gravado em `billing_events` (append-only)
 - [ ] **TEN-07**: Report de custo e uso por tenant acessível via endpoint admin
-- [ ] **TEN-08**: Error format consistente com OpenAI (`{error: {message, type, code}}`) para 401, 403, 429, 5xx
-- [ ] **TEN-09**: Idempotency key support em endpoints de chat (cliente envia `Idempotency-Key` header)
+- [x] **TEN-08**: Error format consistente com OpenAI (`{error: {message, type, code}}`) para 401, 403, 429, 5xx
+- [x] **TEN-09**: Idempotency key support em endpoints de chat (cliente envia `Idempotency-Key` header)
 
 ### Resiliência — Circuit Breakers, Retries, Fallback
 
@@ -180,8 +180,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEN-05 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
 | TEN-06 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
 | TEN-07 | Phase 4: Multi-tenant Quotas, Billing & Schedule Routing | Pending |
-| TEN-08 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
-| TEN-09 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| TEN-08 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
+| TEN-09 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
 | RES-01 | Phase 3: Resilience & Fallback Chain | Pending |
 | RES-02 | Phase 3: Resilience & Fallback Chain | Pending |
 | RES-03 | Phase 3: Resilience & Fallback Chain | Pending |

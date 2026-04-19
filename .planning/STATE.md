@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-18T23:45:00.000Z"
+last_updated: "2026-04-19T00:00:34.065Z"
 progress:
   total_phases: 10
   completed_phases: 1
@@ -28,20 +28,21 @@ progress:
 ## Current Position
 
 Phase: 02 (gateway-core-multi-tenant-auth) — EXECUTING
-Plan: 5 of 9 complete (Wave 4 done)
+Plan: 6 of 9 complete (Wave 5 done)
 
-- **Phase:** Phase 2 execution in progress. Waves 1–4 complete (02-01..02-05). 02-05 delivered async audit writer + SSE tee via ProxyResponseInterceptor (decoupled from ReverseProxy internals per Codex [HIGH/MEDIUM]), model alias resolver with composite (alias, upstream) key (Codex [MEDIUM]), structured Whisper JSON parser (Codex [HIGH]), and /v1/health/upstreams aggregator with 5s cache. `goleak.VerifyNone` regression guard passes for mid-SSE client disconnect. 22 unit tests added, all green under `-race`.
-- **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex (Gemini/OpenCode/Qwen/Cursor/CodeRabbit missing; Claude skipped for independence). `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans across 2 iterations. All 02-05 Codex concerns resolved at implementation time (see 02-05-SUMMARY.md).
-- **Plan:** next wave is 02-06 (idempotency middleware — Redis SET NX EX first-writer-wins + 30s wait budget). 02-05 exported `audit.IdempotencyReplayedSetter` interface for 02-06 to signal replays.
+- **Phase:** Phase 2 execution in progress. Waves 1–5 complete (02-01..02-06). 02-06 shipped the Idempotency-Key middleware (Stripe semantics) on POST /v1/chat/completions non-streaming with Redis `SET NX EX` first-writer-wins, IN_FLIGHT sentinel at `gw:idem:<tenant>:<key>`, 30s wait budget for losers, 24h entry TTL, immediate 422 on hash mismatch (even vs in-flight), 409 + `Retry-After: 5` on wait-poll timeout, 502 → Abort (don't cache). Audit replay flag propagated via `audit.IdempotencyReplayedSetter` interface assertion on the response writer. 32 unit tests pass under `-race` (8 hash + 11 store + 13 middleware including 10-goroutine concurrent serialization asserting upstream hit count == 1).
+- **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex (Gemini/OpenCode/Qwen/Cursor/CodeRabbit missing; Claude skipped for independence). `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans across 2 iterations. All 02-05 Codex concerns resolved at implementation time (see 02-05-SUMMARY.md). Codex [MEDIUM] 02-06 concern (incomplete serialization) resolved by this wave — see SUMMARY confirmations.
+- **Plan:** next wave is 02-07 (integration test: idempotency + audit end-to-end with real Postgres via testcontainers).
 - **Status:** Executing Phase 02
 - **Progress:** [████████░░] 83%
 
 ## Performance Metrics
 
 - **Phases completed:** 1 / 10
-- **Plans completed:** 15 / 18 (9 in Phase 1 + 5 executed in Phase 2 waves 1–4 + 1 optional staging plan)
+- **Plans completed:** 16 / 18 (9 in Phase 1 + 6 executed in Phase 2 waves 1–5 + 1 optional staging plan)
 - **v1 requirements covered by plans:** 21 / 70 (POD-01..POD-07 from Phase 1 + GW-01..GW-10, TEN-01, TEN-02, TEN-08, TEN-09 newly planned in Phase 2)
 - **Plan 02-05:** duration 820s, 2 tasks, 14 files created, 1 file modified, 28 tests added
+- **Plan 02-06:** duration 1100s, 2 tasks, 8 files created, 1 file modified, 32 tests added (19 hash+store + 13 middleware, all -race clean)
 
 ## Accumulated Context
 
@@ -78,7 +79,7 @@ None at present. Roadmap is ready for planning.
 
 ## Session Continuity
 
-- **Last session:** 2026-04-18T23:45:00.000Z
+- **Last session:** 2026-04-19T00:00:30.736Z
 - **Next session should:** Continue `/gsd-execute-phase 2` with Wave 5 (02-06 idempotency middleware). 02-05 exported `audit.IdempotencyReplayedSetter` interface for the replay-path flag propagation; 02-06 type-asserts the ResponseWriter and calls `SetIdempotencyReplayed(true)` on replays. 02-07 will then integration-test the `SELECT idempotency_replayed FROM ai_gateway.audit_log` assertion end-to-end. Wave 7 `02-08-PLAN.md` (Dockerfile + build-gateway.yml + Portainer stack) is `autonomous: false` — human-verify first live deploy.
 
 ---
