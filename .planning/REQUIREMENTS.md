@@ -27,7 +27,7 @@ Requirements para o release inicial. Cada item mapeia para um phase do roadmap.
 - [ ] **GW-06**: Pass-through de tool/function calling no formato OpenAI
 - [x] **GW-07**: Model alias mapping (cliente pede `model: "qwen"`, gateway resolve para versão atual)
 - [x] **GW-08**: Request ID único (UUID) emitido em todo request e echoed em `X-Request-ID` header + logs estruturados
-- [ ] **GW-09**: Deploy Docker Compose + Portainer + webhook GitHub no padrão Ifix (VPS dedicada 4 vCPU)
+- [x] **GW-09**: Deploy Docker Compose + Portainer + webhook GitHub no padrão Ifix (VPS dedicada 4 vCPU)
 - [x] **GW-10**: Schema Postgres inicial (dedicated schema no DO compartilhado) com tabelas `api_keys`, `tenants`, `audit_log`, `billing_events`, `usage_counters`; migrations versionadas
 
 ### Multi-tenant — Auth, Quotas, Cost Attribution
@@ -171,7 +171,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | GW-06 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
 | GW-07 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
 | GW-08 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
-| GW-09 | Phase 2: Gateway Core + Multi-tenant Auth | Pending |
+| GW-09 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
 | GW-10 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
 | TEN-01 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
 | TEN-02 | Phase 2: Gateway Core + Multi-tenant Auth | Complete |
