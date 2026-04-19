@@ -1,23 +1,38 @@
-# Ifix AI Gateway — Portainer stack template.
+# Ifix AI Gateway — Portainer stack template (Docker Swarm).
 #
 # Deploy target: Portainer stack `ai-gateway-dev` / `ai-gateway-prod`
-# managed at portainer3.ifixtelecom.com.br. Env vars are populated in
-# the Portainer stack UI; this file uses ${VAR} interpolation ONLY.
+# managed at portainer3.ifixtelecom.com.br.
+#
+# Target host runs Docker Swarm; this file uses the Compose v3.x schema
+# with the `deploy:` section (Swarm-native) instead of `restart:` /
+# `container_name:` (Compose-only). Env vars come from the Portainer
+# stack UI — this file uses ${VAR} interpolation ONLY.
+#
+# Network model:
+#   - `worker_intra` is the shared overlay network where Traefik discovers
+#     services (--providers.docker.network=worker_intra) and where the
+#     stack's Postgres/Redis live. Mark it `external: true` because
+#     Portainer doesn't recreate shared overlay networks on stack deploy.
+#
+# TLS / public exposure:
+#   - Traefik labels publish ${GATEWAY_DOMAIN} via websecure (443) with
+#     letsencryptresolver. Set GATEWAY_DOMAIN to e.g. ai-gateway-dev.ifixtelecom.com.br
+#     and create a DNS A/AAAA record pointing at the worker host before deploy.
 #
 # Schema migrations: the gateway binary runs goose.Up on boot when
 # AI_GATEWAY_MIGRATE_ON_BOOT=true (CONTEXT.md D-D1). Flip to false after
-# the first successful deploy to save ~100ms of startup.
+# the first successful deploy to save ~100ms of startup and avoid drift
+# during rolling restarts.
 
 services:
   gateway:
     image: ghcr.io/ifixtelecom/ifix-ai-gateway:${TAG:-latest-dev}
-    container_name: ifix-ai-gateway
     environment:
       TZ: America/Sao_Paulo
       GATEWAY_PORT: 8080
       ENV: ${ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      # Data layer (shared DO Postgres + shared Redis Ifix)
+      # Data layer (shared DO Postgres + shared in-cluster Redis)
       AI_GATEWAY_PG_DSN: ${AI_GATEWAY_PG_DSN}
       AI_GATEWAY_PG_MAX_CONNS: ${AI_GATEWAY_PG_MAX_CONNS:-10}
       AI_GATEWAY_REDIS_ADDR: ${AI_GATEWAY_REDIS_ADDR}
@@ -34,11 +49,8 @@ services:
       BOOTSTRAP_TENANT_SLUG: ${BOOTSTRAP_TENANT_SLUG:-converseai}
       # Boot-time migrations (flip off after first prod deploy)
       AI_GATEWAY_MIGRATE_ON_BOOT: ${AI_GATEWAY_MIGRATE_ON_BOOT:-true}
-    ports:
-      - "8080:8080"
     networks:
-      - traefik-public
-    restart: unless-stopped
+      - worker_intra
     healthcheck:
       # /gateway --self-check is a free syscall-ish check; /health needs
       # DB + Redis reachable which is validated on first real request.
@@ -47,7 +59,37 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 0
+        window: 60s
+      update_config:
+        parallelism: 1
+        order: start-first
+        failure_action: rollback
+        monitor: 30s
+      rollback_config:
+        parallelism: 1
+        order: stop-first
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.ai_gateway.rule=Host(`${GATEWAY_DOMAIN}`)"
+        - "traefik.http.routers.ai_gateway.entrypoints=websecure"
+        - "traefik.http.routers.ai_gateway.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.ai_gateway.loadbalancer.server.port=8080"
+        - "traefik.http.services.ai_gateway.loadbalancer.passHostHeader=true"
 
 networks:
-  traefik-public:
+  worker_intra:
     external: true
