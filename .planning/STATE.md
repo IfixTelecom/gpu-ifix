@@ -72,6 +72,7 @@ Plan: 8 of 9 executed (02-09 optional/deferred to Phase 7/10) — awaiting user'
 - [ ] Phase 1 HUMAN-UAT: Empirical VRAM ceiling under load (2×8k-token chats + 1 long Whisper — blocked on smoke.yml run)
 - [ ] Phase 1 HUMAN-UAT: Cold-start ≤5 min on fresh Vast.ai 4090 (blocked on smoke.yml run)
 - [ ] Phase 3: Confirm OpenRouter upstream provider for Qwen 3.5 27B (Together? Fireworks? DeepInfra?)
+- [ ] Phase 3: Add `UPSTREAM_LLM_AUTH_BEARER` (+ STT/EMBED variants) env to inject Authorization header in proxy Director (currently strips client auth but never adds upstream auth; needed for OpenRouter/cloud fallback). Required as part of failover/circuit-breaker work.
 - [ ] Phase 5: Tune saturation thresholds (inflight N, P95 ms, VRAM GB) from Phase 1 baseline
 - [ ] Phase 6: Timeboxed (3h) Vast.ai REST API spike before committing the phase scope
 - [ ] Phase 7: Confirm Ifix WhatsApp provider (Evolution API / Z-API / Chatwoot / proprietary)
