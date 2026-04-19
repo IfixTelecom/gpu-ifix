@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-19T01:12:29.567Z"
+last_updated: "2026-04-19T01:21:04.594Z"
 progress:
   total_phases: 10
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 18
   completed_plans: 17
   percent: 94
@@ -27,14 +27,14 @@ progress:
 
 ## Current Position
 
-Phase: 02 (gateway-core-multi-tenant-auth) — EXECUTING
-Plan: 8 of 9 complete (Wave 7 done — awaiting user's live-deploy verification post-push)
+Phase: 02 (gateway-core-multi-tenant-auth) — COMPLETE (verified)
+Plan: 8 of 9 executed (02-09 optional/deferred to Phase 7/10) — awaiting user's live-deploy verification post-push for SC-5
 
-- **Phase:** Phase 2 execution in progress. Waves 1–7 complete (02-01..02-08). 02-08 shipped the deploy pipeline: `gateway/Dockerfile` 2-stage distroless (golang:1.23-alpine → gcr.io/distroless/static-debian12, 27.7 MB) containing both `/gateway` (ENTRYPOINT) and `/gatewayctl`; `gateway/docker-compose.yml` Portainer stack template with `${VAR}` interpolation only + traefik-public external network + `/gateway --self-check` healthcheck; `.github/workflows/build-gateway.yml` 7-job pipeline (test → integration-test → compute-tags → build-gateway → deploy-dev/prod → summary) mirroring `build-pod.yml` structure with two new Portainer webhook jobs (D-21/D-23 tag policy preserved). Rule-1 fix during execution: added `tzdata` to builder apk install because `golang:1.23-alpine` does not ship `/usr/share/zoneinfo` by default. Task 3 (live VPS smoke-test) deferred to user per explicit authorization — they run the verification after `git push origin develop` triggers the first live Actions + Portainer redeploy.
-- **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex (Gemini/OpenCode/Qwen/Cursor/CodeRabbit missing; Claude skipped for independence). `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans across 2 iterations. All 02-05/02-06/02-07 Codex concerns now resolved in shipped code (see 02-07-SUMMARY.md — B2 contract + goroutine leak + partition auto + auth hot path under load all covered by integration tests).
-- **Plan:** next wave is 02-09 (audit export/retention; optional per Codex review — can be deferred until Phase 7 dashboard demands cold-storage story).
-- **Status:** Executing Phase 02
-- **Progress:** [█████████░] 94%
+- **Phase:** Phase 2 COMPLETE. Waves 1–7 executed (02-01..02-08), 02-09 deferred. `02-VERIFICATION.md` produced by gsd-verifier: 4/5 Success Criteria full PASS + SC-5 PARTIAL (live deploy is human-verify checkpoint, all artifacts verified locally) + 14/14 in-scope requirements PASS (GW-01..GW-10, TEN-01/02/08/09). 0 FAIL. `go test ./gateway/... -count=1` green across 12 packages. REQUIREMENTS.md table flipped GW-03..GW-06 → Complete after verifier audit (commit `da9c0f2`).
+- **Reviews cycle (2026-04-18):** `/gsd-review --phase 2 --all` invoked Codex. `02-REVIEWS.md` committed with 4 HIGH/MEDIUM + 2 LOW concerns. `/gsd-plan-phase 2 --reviews` revised 8/9 plans. All Codex concerns resolved in shipped code (B2 contract + goroutine leak + partition auto + auth hot path covered by integration tests in 02-07).
+- **Plan:** next phase is Phase 3 (failover + circuit breakers). Recommended: `/clear` then `/gsd-plan-phase 3`. Before that, **user should `git push origin master`** (or move commits to develop) and run the 10-step post-push checklist in `.planning/phases/02-gateway-core-multi-tenant-auth/02-08-SUMMARY.md` to close the SC-5 PARTIAL.
+- **Status:** Phase 02 complete; Phase 03 ready to plan
+- **Progress:** [██████████] 94% (17/18 plans; 02-09 deferred)
 
 ## Performance Metrics
 
@@ -85,7 +85,7 @@ None at present. Roadmap is ready for planning.
 ## Session Continuity
 
 - **Last session:** 2026-04-19T01:12:02.989Z
-- **Next session should:** (1) User pushes `develop` to trigger first run of `build-gateway.yml`; (2) User runs the post-push verification checklist in `02-08-SUMMARY.md` (10 steps: Actions green, container healthy, /health ok, migrate status, tenant + key create, end-to-end chat via pod, 401 for unauth, audit row present, tidy up); (3) then continue `/gsd-execute-phase 2` with Wave 8 (02-09 audit export/retention — OPTIONAL, can defer to Phase 7). Before the first push the user MUST set GitHub Secrets `PORTAINER_WEBHOOK_URL_DEV_GATEWAY` + `PORTAINER_WEBHOOK_URL_PROD_GATEWAY` and create Portainer stack `ai-gateway-dev` via "Repository + webhook" method pointing at `gateway/docker-compose.yml` on `develop`.
+- **Next session should:** Phase 2 COMPLETE (verified by gsd-verifier — `02-VERIFICATION.md`, 4/5 SC PASS + 14/14 reqs PASS, 0 FAIL; SC-5 PARTIAL only because live deploy is human-verify checkpoint). Recommended next: `/clear` then `/gsd-plan-phase 3` (failover + circuit breakers). In parallel, user closes the SC-5 PARTIAL: (a) set GitHub Secrets `PORTAINER_WEBHOOK_URL_DEV_GATEWAY` + `PORTAINER_WEBHOOK_URL_PROD_GATEWAY`; (b) create Portainer stack `ai-gateway-dev` via "Repository + webhook" pointing at `gateway/docker-compose.yml` on `develop`; (c) `git push origin master` (or merge to `develop`); (d) run the 10-step post-push checklist in `02-08-SUMMARY.md`. 02-09 (cold-storage audit export) deferred to Phase 7/10 per Codex scope-creep ruling — re-evaluate when audit_log grows past ~60 days of production traffic.
 
 ---
 
