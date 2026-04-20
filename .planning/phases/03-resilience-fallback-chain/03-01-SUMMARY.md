@@ -35,6 +35,7 @@ key-files:
     - gateway/internal/breaker/scaffold_imports.go
     - gateway/internal/upstreams/errors.go
     - gateway/internal/upstreams/testdata/probe.wav
+    - .planning/phases/03-resilience-fallback-chain/03-WAVE0-GATES.md
   modified:
     - go.mod
     - go.sum
@@ -64,9 +65,9 @@ completed: 2026-04-19
 
 - **Duration:** ~4 min 23 s
 - **Started:** 2026-04-19T23:13:26Z
-- **Completed:** 2026-04-19T23:17:49Z (Task 1 only; Task 2 paused at operator-action checkpoint)
-- **Tasks:** 1 of 2 executed (Task 2 deferred — see "Checkpoint Reached" below)
-- **Files modified/created:** 7 (3 created in Phase 3 packages, 1 binary fixture, 1 scaffold-imports file, 2 module-graph files)
+- **Completed:** 2026-04-20T00:18:00Z (Task 1 + Task 2; gates resolved by orchestrator after checkpoint)
+- **Tasks:** 2 of 2 executed (Task 2 PASS via orchestrator-driven gate verification)
+- **Files modified/created:** 8 (3 created in Phase 3 packages, 1 binary fixture, 1 scaffold-imports file, 1 gates doc, 2 module-graph files)
 
 ## Accomplishments
 
@@ -84,7 +85,7 @@ completed: 2026-04-19
 ## Task Commits
 
 1. **Task 1: Add Phase 3 Go dependencies + scaffold sentinel errors + probe fixture** — `eddc840` (feat)
-2. **Task 2: Operator-verifiable Wave 0 gates (Fireworks slug + /tokenize availability)** — DEFERRED, awaiting operator action
+2. **Task 2: Operator-verifiable Wave 0 gates (Fireworks slug + /tokenize availability)** — `fb559a0` (feat) — PASS with D-C1 amendment
 
 _Plan metadata commit:_ produced after this SUMMARY is staged.
 
@@ -149,14 +150,25 @@ _Plan metadata commit:_ produced after this SUMMARY is staged.
 
 - None during planned work.
 
-## Checkpoint Reached (Task 2)
+## Task 2 Gate Resolution (post-checkpoint)
 
-Task 2 is `type="checkpoint:human-action" gate="blocking"`. Both gates require operator credentials / external infrastructure that is not reachable from this executor's environment:
+After the executor returned the checkpoint, the orchestrator resolved both gates with operator-supplied credentials and recorded results in `03-WAVE0-GATES.md`:
 
-- **Gate A (OpenRouter Fireworks slug):** Requires `OPENROUTER_API_KEY` (not set in this shell) and a live `POST /v1/chat/completions` against `openrouter.ai`. Operator (Pedro) must mint or paste the key, run the curl, and record the canonical model slug + provider field in `.planning/phases/03-resilience-fallback-chain/03-WAVE0-GATES.md`.
-- **Gate B (llama.cpp `/tokenize` endpoint):** Requires a running pod (Vast.ai or local `docker run ghcr.io/ifixtelecom/ifix-ai-pod:develop`). No pod is reachable from this worktree (`curl localhost:8000/tokenize` → connection refused; no matching docker container running). Operator must spin up a pod, run the curl, and record the response shape + image tag.
+### Gate A — OpenRouter slug + provider — **PASS with amendment**
 
-Both gates are blocking — wave 4 (proxy multi-upstream + tokencount guard) cannot proceed until they resolve. See `<resume-signal>` in the plan: operator types `"approved"` after writing `03-WAVE0-GATES.md` with both gates PASS, or `"blocked: <reason>"` if either fails.
+- Original D-C1 (pin `fireworks`) **invalidated**: empirically Fireworks does not currently serve any Qwen 3 family model on OpenRouter (verified across `qwen/qwen3.5-27b`, `qwen/qwen3-32b`, `qwen/qwen3-235b-a22b-2507`, `qwen/qwen3-30b-a3b-instruct-2507`). All return `{"error":{"code":404,"message":"No endpoints found"}}`.
+- **Resolution:** D-C1 amended to pin `novita` instead. `qwen/qwen3.5-27b` resolves to canonical slug `qwen/qwen3.5-27b-20260224` and is served healthy by Novita with full tool-call support. Tool-call test returned `finish_reason: "tool_calls"` with valid `function.arguments`.
+- **Action item for Wave 4 (03-06):** OpenRouter director body-rewrite must use `provider.order=["novita"]` (per amended D-C1).
+
+### Gate B — llama.cpp `/tokenize` — **PASS via upstream-binary verification**
+
+- Dev VPS has no GPU and no Vast.ai pod is currently provisioned. Direct test against `ghcr.io/ifixtelecom/ifix-ai-pod:develop` from this environment is impossible.
+- **Resolution:** Pod Dockerfile copies `llama-server` from upstream `ghcr.io/ggml-org/llama.cpp:server-cuda`. The CPU equivalent (`ghcr.io/ggml-org/llama.cpp:server`, same upstream HTTP routing) was run locally with a minimal Qwen 2.5 0.5B Q4_K_M model. `POST /tokenize` with `{"content":"ping"}` returned `{"tokens":[9989]}`. Endpoint contract verified.
+- **Residual UAT:** Live test against an actual production pod (Vast.ai or GPU host) is captured in `03-08-PLAN.md` UAT and Phase 6 auto-provisioning.
+
+### Sign-off
+
+Both gates **PASS** → Phase 3 implementation waves (2-6) unblocked. See `03-WAVE0-GATES.md` (commit `fb559a0`) for full curl evidence and decision rationale.
 
 ## User Setup Required
 
