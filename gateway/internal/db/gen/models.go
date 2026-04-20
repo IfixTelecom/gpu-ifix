@@ -71,6 +71,29 @@ type AiGatewayTenant struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Runtime source-of-truth for multi-upstream dispatcher (Phase 3 D-D2). Hot-reloaded via LISTEN upstreams_changed.
+type AiGatewayUpstream struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Role string    `json:"role"`
+	Tier int32     `json:"tier"`
+	// Env var NAME whose value is the upstream URL. Gateway resolves os.Getenv(url_env) at load.
+	UrlEnv string `json:"url_env"`
+	// Env var NAME whose value is the Bearer token for upstream Auth header. NULL = no auth injected.
+	AuthBearerEnv pgtype.Text `json:"auth_bearer_env"`
+	Enabled       bool        `json:"enabled"`
+	// Phase 5 load-shedding weight. NULL in Phase 3.
+	Weight pgtype.Int4 `json:"weight"`
+	// JSONB {failures:int, cooldown_s:int} overriding defaults. Empty = use BREAKER_* env defaults.
+	CircuitConfig   []byte             `json:"circuit_config"`
+	LastProbeAt     pgtype.Timestamptz `json:"last_probe_at"`
+	LastProbeMs     pgtype.Int4        `json:"last_probe_ms"`
+	LastProbeStatus pgtype.Text        `json:"last_probe_status"`
+	LastProbeError  pgtype.Text        `json:"last_probe_error"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
 type AiGatewayUsageCounter struct {
 	TenantID      uuid.UUID   `json:"tenant_id"`
 	Date          pgtype.Date `json:"date"`
