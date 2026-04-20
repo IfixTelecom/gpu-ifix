@@ -221,7 +221,10 @@ func clearPhase3(t *testing.T) {
 // vars set, Load returns the documented Plan-03-02 defaults: probe
 // 10s/5s, breaker 3 failures / 30s cooldown, per-route WriteTimeout
 // 0/30s/120s for chat/embed/audio (Folded Todo from CONTEXT.md), and
-// OpenRouter provider order ['fireworks'] with allow_fallbacks=false.
+// OpenRouter provider order ['novita'] with allow_fallbacks=false.
+// (D-C1 amendment per 03-WAVE0-GATES.md — Fireworks does not serve Qwen 3
+// family on OpenRouter as of 2026-04-20; Novita confirmed serving with
+// finish_reason: "tool_calls".)
 func TestLoad_Phase3Defaults(t *testing.T) {
 	clearAll(t)
 	clearPhase3(t)
@@ -252,8 +255,8 @@ func TestLoad_Phase3Defaults(t *testing.T) {
 		t.Errorf("WriteTimeoutAudio = %v, want 120s", cfg.WriteTimeoutAudio)
 	}
 	if len(cfg.UpstreamOpenRouterProviderOrder) != 1 ||
-		cfg.UpstreamOpenRouterProviderOrder[0] != "fireworks" {
-		t.Errorf("UpstreamOpenRouterProviderOrder = %v, want [fireworks]",
+		cfg.UpstreamOpenRouterProviderOrder[0] != "novita" {
+		t.Errorf("UpstreamOpenRouterProviderOrder = %v, want [novita]",
 			cfg.UpstreamOpenRouterProviderOrder)
 	}
 	if cfg.UpstreamOpenRouterAllowFallbacks != false {
