@@ -176,10 +176,15 @@ func (cfg DispatcherConfig) dispatchTo(w http.ResponseWriter, r *http.Request, n
 // (or streaming pre-flight fail-fast). Stamps the audit context with
 // upstream="blocked_sensitive" so the audit middleware records D-B3.
 func (cfg DispatcherConfig) writeSensitiveBlock(w http.ResponseWriter, r *http.Request) {
-	// Mutate the request reference so the audit middleware (which reads
-	// r.Context after our handler returns) sees the override. We can't
-	// pass a derived ctx upstream after WriteHeader, so we update the
-	// request struct in place.
+	// Mutate the request reference in-place so the audit middleware sees the
+	// override via r.Context() after ServeHTTP returns. This is safe ONLY
+	// because audit.Middleware reads r.Context() sequentially AFTER
+	// next.ServeHTTP(aw, r) returns — there is no concurrent goroutine
+	// reading *r at this point. CONTRACT: if audit.Middleware ever moves
+	// the r.Context() read into a separate goroutine, this in-place
+	// mutation MUST be replaced with a sync.Map keyed by request_id or a
+	// dedicated response header that the audit middleware reads instead.
+	// See HIGH-02 in 03-REVIEW.md for the full fragility analysis.
 	*r = *r.WithContext(auditctx.WithUpstreamOverride(r.Context(), UpstreamBlockedSensitiveValue))
 	w.Header().Set("Retry-After", "30")
 	httpx.WriteOpenAIError(w, http.StatusServiceUnavailable,
