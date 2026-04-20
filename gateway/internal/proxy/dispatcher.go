@@ -80,7 +80,17 @@ func NewDispatcher(cfg DispatcherConfig) http.Handler {
 		if cfg.TokenCounter != nil && cfg.ContextCap > 0 {
 			body, err := readAndRestoreBody(r)
 			if err == nil && len(body) > 0 {
-				if _, terr := cfg.TokenCounter.Enforce(r.Context(), body, cfg.Role, cfg.ContextCap); terr != nil {
+				// Extract the model name from the body so the cache key is
+				// specific to the requested model's tokenizer (Pitfall 6 /
+				// HIGH-04: passing cfg.Role here caused cross-tokenizer cache
+				// collisions — e.g. a "gpt-4o" request would reuse a cached
+				// count produced by the Qwen tokenizer). Fall back to cfg.Role
+				// only when the body carries no "model" field.
+				modelName := extractModelName(body)
+				if modelName == "" {
+					modelName = cfg.Role
+				}
+				if _, terr := cfg.TokenCounter.Enforce(r.Context(), body, modelName, cfg.ContextCap); terr != nil {
 					httpx.WriteOpenAIError(w, http.StatusBadRequest,
 						"invalid_request_error", "context_length_exceeded",
 						"Request exceeds context cap.")

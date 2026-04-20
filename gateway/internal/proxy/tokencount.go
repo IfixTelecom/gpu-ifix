@@ -193,6 +193,22 @@ func extractTokenizeText(body []byte) string {
 	return string(body)
 }
 
+// extractModelName pulls the "model" field from a JSON request body.
+// Returns an empty string on parse failure or missing field so callers
+// can fall back to a safe default (e.g. the role name). Used by the
+// dispatcher to build a cache key that is specific to the tokenizer of
+// the requested model, preventing cross-tokenizer cache collisions
+// (Pitfall 6 / HIGH-04 fix: cfg.Role was previously passed as model).
+func extractModelName(body []byte) string {
+	var m struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	return m.Model
+}
+
 // readAndRestoreBody is a helper for directors and the dispatcher. Reads
 // the body, then restores it into a fresh ReadCloser so downstream handlers
 // can read it again. Caller must set Content-Length if the body was
