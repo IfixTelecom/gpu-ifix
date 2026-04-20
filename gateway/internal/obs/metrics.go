@@ -49,5 +49,17 @@ var ApikeyTouchFlushTotal = promauto.NewCounter(
 	},
 )
 
+// UpstreamsReloadTotal counts upstreams.Loader.Refresh invocations,
+// labelled by outcome ("ok" | "error"). Phase 3 D-D2 — incremented at
+// boot Refresh and on each LISTEN/NOTIFY-driven reload. Helps operators
+// detect reload storms (Pitfall 7) or persistent DB read failures.
+var UpstreamsReloadTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "gateway_upstreams_reload_total",
+		Help: "Total upstreams loader Refresh invocations by outcome.",
+	},
+	[]string{"result"},
+)
+
 // Handler returns the /metrics endpoint handler.
 func Handler() http.Handler { return promhttp.Handler() }
