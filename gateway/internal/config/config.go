@@ -50,7 +50,7 @@ type Config struct {
 	// row in ai_gateway.upstreams is enabled but the env it points to is missing)
 	UpstreamOpenRouterChatURL        string   // UPSTREAM_LLM_OPENROUTER_URL
 	UpstreamOpenRouterChatAuthBearer string   // UPSTREAM_LLM_OPENROUTER_AUTH_BEARER
-	UpstreamOpenRouterProviderOrder  []string // UPSTREAM_LLM_OPENROUTER_PROVIDER_ORDER (CSV; default ["fireworks"])
+	UpstreamOpenRouterProviderOrder  []string // UPSTREAM_LLM_OPENROUTER_PROVIDER_ORDER (CSV; default ["novita"] — D-C1 amendment per 03-WAVE0-GATES.md, Fireworks does not serve Qwen 3 family on OpenRouter as of 2026-04-20)
 	UpstreamOpenRouterAllowFallbacks bool     // UPSTREAM_LLM_OPENROUTER_ALLOW_FALLBACKS (default false)
 	UpstreamOpenAIWhisperURL         string   // UPSTREAM_STT_OPENAI_URL
 	UpstreamOpenAIWhisperAuthBearer  string   // UPSTREAM_STT_OPENAI_AUTH_BEARER
@@ -109,7 +109,7 @@ func Load() (Config, error) {
 		// Phase 3 external upstreams (optional at boot)
 		UpstreamOpenRouterChatURL:        os.Getenv("UPSTREAM_LLM_OPENROUTER_URL"),
 		UpstreamOpenRouterChatAuthBearer: os.Getenv("UPSTREAM_LLM_OPENROUTER_AUTH_BEARER"),
-		UpstreamOpenRouterProviderOrder:  csvOr(os.Getenv("UPSTREAM_LLM_OPENROUTER_PROVIDER_ORDER"), []string{"fireworks"}),
+		UpstreamOpenRouterProviderOrder:  csvOr(os.Getenv("UPSTREAM_LLM_OPENROUTER_PROVIDER_ORDER"), []string{"novita"}),
 		UpstreamOpenRouterAllowFallbacks: boolOr(os.Getenv("UPSTREAM_LLM_OPENROUTER_ALLOW_FALLBACKS"), false),
 		UpstreamOpenAIWhisperURL:         os.Getenv("UPSTREAM_STT_OPENAI_URL"),
 		UpstreamOpenAIWhisperAuthBearer:  os.Getenv("UPSTREAM_STT_OPENAI_AUTH_BEARER"),
