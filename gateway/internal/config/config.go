@@ -44,7 +44,7 @@ type Config struct {
 	UpstreamLLMURL          string // UPSTREAM_LLM_URL (required)
 	UpstreamSTTURL          string // UPSTREAM_STT_URL (required)
 	UpstreamEmbedURL        string // UPSTREAM_EMBED_URL (required)
-	UpstreamHealthBridgeURL string // UPSTREAM_HEALTH_BRIDGE_URL (required)
+	UpstreamHealthBridgeURL string // UPSTREAM_HEALTH_BRIDGE_URL (optional — Phase 3 D-D4: health-bridge is a pod-internal debug surface, not required for gateway operation)
 
 	// Phase 3 — External fallback upstreams (optional at boot; warn-log if a
 	// row in ai_gateway.upstreams is enabled but the env it points to is missing)
@@ -141,16 +141,19 @@ func Load() (Config, error) {
 		"UPSTREAM_LLM_URL",
 		"UPSTREAM_STT_URL",
 		"UPSTREAM_EMBED_URL",
-		"UPSTREAM_HEALTH_BRIDGE_URL",
 	}
 	required := map[string]string{
-		"AI_GATEWAY_PG_DSN":          cfg.PGDSN,
-		"AI_GATEWAY_REDIS_ADDR":      cfg.RedisAddr,
-		"UPSTREAM_LLM_URL":           cfg.UpstreamLLMURL,
-		"UPSTREAM_STT_URL":           cfg.UpstreamSTTURL,
-		"UPSTREAM_EMBED_URL":         cfg.UpstreamEmbedURL,
-		"UPSTREAM_HEALTH_BRIDGE_URL": cfg.UpstreamHealthBridgeURL,
+		"AI_GATEWAY_PG_DSN":     cfg.PGDSN,
+		"AI_GATEWAY_REDIS_ADDR": cfg.RedisAddr,
+		"UPSTREAM_LLM_URL":      cfg.UpstreamLLMURL,
+		"UPSTREAM_STT_URL":      cfg.UpstreamSTTURL,
+		"UPSTREAM_EMBED_URL":    cfg.UpstreamEmbedURL,
 	}
+	// UPSTREAM_HEALTH_BRIDGE_URL is now optional (Phase 3 D-D4 MED-06):
+	// the health-bridge is a pod-internal debug surface only; gateway
+	// routing uses upstreams.Loader + breaker.Set as the authority.
+	// Operators deploying without the bridge (Vast.ai pod down, partial
+	// config) should not have boot blocked by a non-critical variable.
 	var missing []string
 	for _, name := range requiredOrder {
 		if strings.TrimSpace(required[name]) == "" {

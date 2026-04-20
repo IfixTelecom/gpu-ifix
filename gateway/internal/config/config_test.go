@@ -10,14 +10,14 @@ import (
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
 )
 
-// allRequired are the six env vars Load() insists on.
+// allRequired are the five env vars Load() insists on (Phase 3 MED-06:
+// UPSTREAM_HEALTH_BRIDGE_URL was demoted to optional — see config.go).
 var allRequired = []string{
 	"AI_GATEWAY_PG_DSN",
 	"AI_GATEWAY_REDIS_ADDR",
 	"UPSTREAM_LLM_URL",
 	"UPSTREAM_STT_URL",
 	"UPSTREAM_EMBED_URL",
-	"UPSTREAM_HEALTH_BRIDGE_URL",
 }
 
 // optionalVars are other vars we may want to clear so one test does not
@@ -86,10 +86,10 @@ func TestLoad_AllRequiredPresent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if cfg.PGDSN == "" || cfg.RedisAddr == "" || cfg.UpstreamLLMURL == "" ||
-		cfg.UpstreamSTTURL == "" || cfg.UpstreamEmbedURL == "" ||
-		cfg.UpstreamHealthBridgeURL == "" {
+		cfg.UpstreamSTTURL == "" || cfg.UpstreamEmbedURL == "" {
 		t.Fatalf("expected populated required fields, got %+v", cfg)
 	}
+	// UpstreamHealthBridgeURL is optional since Phase 3 MED-06; not checked here.
 }
 
 func TestLoad_DefaultPort(t *testing.T) {
@@ -217,8 +217,9 @@ func clearPhase3(t *testing.T) {
 	}
 }
 
-// TestLoad_Phase3Defaults verifies that with only the 6 Phase-2 required
-// vars set, Load returns the documented Plan-03-02 defaults: probe
+// TestLoad_Phase3Defaults verifies that with only the 5 required vars set
+// (UPSTREAM_HEALTH_BRIDGE_URL is now optional per MED-06), Load returns
+// the documented Plan-03-02 defaults: probe
 // 10s/5s, breaker 3 failures / 30s cooldown, per-route WriteTimeout
 // 0/30s/120s for chat/embed/audio (Folded Todo from CONTEXT.md), and
 // OpenRouter provider order ['novita'] with allow_fallbacks=false.
@@ -306,7 +307,7 @@ func TestLoad_Phase3CustomValues(t *testing.T) {
 func TestLoad_Phase3ExternalURLsOptional(t *testing.T) {
 	clearAll(t)
 	clearPhase3(t)
-	setAllRequired(t) // Only the 6 Phase 2 required vars.
+	setAllRequired(t) // Only the 5 required vars (UPSTREAM_HEALTH_BRIDGE_URL now optional).
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("expected Load to succeed without external URLs, got: %v", err)
