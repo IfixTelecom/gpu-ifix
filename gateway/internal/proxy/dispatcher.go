@@ -23,6 +23,8 @@
 package proxy
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -131,8 +133,15 @@ func NewDispatcher(cfg DispatcherConfig) http.Handler {
 				return
 			}
 			// D-B1 — bounded retry loop (~4s); blocks if breaker stays OPEN.
-			ok, _ := SensitiveRetry(r.Context(), cfg.Breaker, t0.Name)
+			ok, retryErr := SensitiveRetry(r.Context(), cfg.Breaker, t0.Name)
 			if !ok {
+				if errors.Is(retryErr, context.Canceled) {
+					// Client disconnected during the retry wait; nothing to
+					// write — the ResponseWriter is already gone. Avoids
+					// inflating the blocked_response metric for canceled
+					// requests (MED-05 fix).
+					return
+				}
 				cfg.writeSensitiveBlock(w, r)
 				return
 			}
