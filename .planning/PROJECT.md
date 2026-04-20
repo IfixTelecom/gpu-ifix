@@ -12,15 +12,14 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] **Pod image (Phase 1):** llama-server CUDA 27B + speaches Whisper + BGE-M3 + onstart.sh com bridge de healthcheck — validado em 01-VERIFICATION.md
+- [x] **Gateway HTTP em Go (Phase 2):** Elysia-style routes `/v1/chat/completions`, `/v1/embeddings`, `/v1/audio/transcriptions` com proxy + auth multi-tenant (API key por aplicação) — validado em 02-VERIFICATION.md (4/5 SC PASS, SC-5 live deploy aguarda)
+- [x] **Resilience & failover chain (Phase 3):** Circuit breakers per-upstream, fallback chain local→OpenRouter (Novita)→OpenAI, hot-reload <1s, sensitive-tenant block, tool-call no-retry — validado em 03-VERIFICATION.md (4/5 SC PASS, SC-1 live pod-kill em 03-HUMAN-UAT.md)
 
 ### Active
 
-- [ ] Subir stack de IA na GPU primária (Vast.ai 4090): Qwen 3.5 27B (LLM, porta 8000), Whisper large-v3 (STT, porta 8001), BGE-M3 (embedding, porta 8002), todos com APIs compatíveis com formato OpenAI
-- [ ] Gateway HTTP em Go que roteia requests para LLM, STT e embedding, com APIs OpenAI-compatíveis (`/v1/chat/completions`, `/v1/embeddings`, `/v1/audio/transcriptions`)
-- [ ] Autenticação multi-tenant: API key por aplicação, com quotas e rate-limit individuais
-- [ ] Health-check periódico nos três serviços + circuit breaker (abre quando N falhas seguidas ou latência acima de threshold)
-- [ ] Failover automático para OpenRouter (Qwen 3.5 27B), OpenAI Whisper API e OpenAI text-embedding-3-small quando GPU primária cai
+- [ ] Health-check periódico nos três serviços + circuit breaker (abre quando N falhas seguidas ou latência acima de threshold) — _coberto pelos breakers Phase 3, mas health probe ainda precisa de cleanup_
+- [ ] Failover automático para OpenRouter (Qwen 3.5 27B via Novita), OpenAI Whisper API e OpenAI text-embedding-3-small quando GPU primária cai _(Phase 3 entregou; live UAT pendente)_
 - [ ] Load shedding: detectar saturação por utilização de GPU/VRAM e desviar overflow para OpenRouter sem esperar falha real
 - [ ] Spin-up emergencial paralelo de pod Vast.ai quando primária cai (auto, com guardrails: limite de preço/h e máximo 1 pod emergencial ativo)
 - [ ] Cutback automático para primária quando ela voltar saudável por 5 min, com grace period de 5 min antes de desligar pod emergencial
@@ -114,4 +113,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-17 after initialization*
+*Last updated: 2026-04-20 after Phase 3 (resilience + fallback chain) complete*
