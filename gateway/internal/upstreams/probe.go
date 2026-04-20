@@ -36,6 +36,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -88,7 +89,7 @@ type Probe struct {
 	client  *http.Client
 
 	updates chan gen.UpdateUpstreamProbeParams
-	dropped uint64 // observable via Dropped() for tests; non-atomic OK (single producer at hot-path moment)
+	dropped atomic.Uint64 // observable via Dropped() for tests; multiple probeOne goroutines may call enqueueUpdate concurrently
 	mu      sync.Mutex
 
 	// flushWg waits for the writeback goroutine to drain on Run exit so
@@ -145,9 +146,7 @@ func (p *Probe) Run(ctx context.Context) {
 // Dropped returns the running count of probe writeback enqueues dropped
 // because the buffer was full. Test hook only.
 func (p *Probe) Dropped() uint64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.dropped
+	return p.dropped.Load()
 }
 
 // doTick dispatches all parallel probes for this cycle. Pitfall 3: uses
@@ -302,9 +301,7 @@ func (p *Probe) enqueueUpdate(name string, dur time.Duration, status, errMsg str
 	select {
 	case p.updates <- params:
 	default:
-		p.mu.Lock()
-		p.dropped++
-		p.mu.Unlock()
+		p.dropped.Add(1)
 	}
 }
 
