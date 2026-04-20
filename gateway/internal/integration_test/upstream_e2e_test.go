@@ -4,62 +4,104 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/breaker"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/upstreams"
 )
 
-// TestIntegration_07_UpstreamHealth verifies the /v1/health/upstreams
-// handler coalesces requests within its 5s cache window.
+// TestIntegration_07_UpstreamHealth verifies the Phase 3 refactored
+// /v1/health/upstreams handler. The handler no longer proxies to the
+// pod's :9100 bridge — Phase 3 derives state in-process from the
+// upstreams loader + breaker.Set (CONTEXT.md D-D1). This integration
+// test wires both real components against testcontainer Postgres +
+// Redis and asserts the response body shape + 2s cache TTL.
 func TestIntegration_07_UpstreamHealth(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	_, _ = freshSchema(t, ctx)
+	pool, rdb := freshSchema(t, ctx)
+	resetUpstreamsTable(t, ctx, pool)
+	clearUpstreamEnvs(t)
+	t.Setenv("UPSTREAM_LLM_URL", "http://local-llm:8000")
+	t.Setenv("UPSTREAM_STT_URL", "http://local-stt:8001")
+	t.Setenv("UPSTREAM_EMBED_URL", "http://local-embed:8002")
+	t.Setenv("UPSTREAM_LLM_OPENROUTER_URL", "https://openrouter.ai/api/v1")
+	t.Setenv("UPSTREAM_LLM_OPENROUTER_AUTH_BEARER", "or-test")
+	t.Setenv("UPSTREAM_STT_OPENAI_URL", "https://api.openai.com/v1")
+	t.Setenv("UPSTREAM_STT_OPENAI_AUTH_BEARER", "oa-test")
+	t.Setenv("UPSTREAM_EMBED_OPENAI_URL", "https://api.openai.com/v1")
+	t.Setenv("UPSTREAM_EMBED_OPENAI_AUTH_BEARER", "oa-embed")
 
-	var hits int64
-	bridge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt64(&hits, 1)
-		if r.URL.Path != "/health" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"status":"healthy","services":{"llm":{"status":"healthy","latency_ms":40},"stt":{"status":"healthy","latency_ms":200},"embed":{"status":"healthy","latency_ms":30}},"uptime_s":100}`))
-	}))
-	defer bridge.Close()
+	loader, err := upstreams.NewLoader(ctx, pool, discardLogger())
+	if err != nil {
+		t.Fatalf("NewLoader: %v", err)
+	}
+	bs := breaker.NewSet(rdb, discardLogger(),
+		breaker.Options{ConsecutiveFailures: 3, Cooldown: 30 * time.Second},
+		loader.Names())
 
-	h := upstreams.NewHealthHandler(bridge.URL, discardLogger())
+	h := upstreams.NewHealthHandler(loader, bs, discardLogger())
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
-	// Three rapid requests: only one should hit the bridge (5s cache).
-	for i := 0; i < 3; i++ {
-		resp, err := http.Get(srv.URL)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("iter %d got %d want 200", i, resp.StatusCode)
-		}
-		_ = resp.Body.Close()
-	}
-	if n := atomic.LoadInt64(&hits); n != 1 {
-		t.Errorf("bridge hits got %d want 1 (cache should coalesce)", n)
-	}
-
-	// Wait past cache TTL and retry.
-	time.Sleep(5500 * time.Millisecond)
+	// Baseline: every breaker CLOSED → status=ok with 200.
 	resp, err := http.Get(srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if n := atomic.LoadInt64(&hits); n != 2 {
-		t.Errorf("post-TTL hits got %d want 2", n)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("baseline: status = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env["status"] != "ok" {
+		t.Errorf("baseline status = %v, want ok", env["status"])
+	}
+	ups, _ := env["upstreams"].(map[string]any)
+	if got := len(ups); got != 6 {
+		t.Errorf("upstreams count = %d, want 6", got)
+	}
+
+	// Trip the local-llm breaker. Per the cache TTL (2s), the next GET
+	// MUST still return ok (cached). After the TTL the new state
+	// (degraded — tier-1 openrouter-chat is still CLOSED) must surface.
+	for i := 0; i < 3; i++ {
+		_, _ = bs.Execute("local-llm", func() (*http.Response, error) {
+			return nil, &breaker.HTTPError{Status: 503, Msg: "trip"}
+		})
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Cached: still ok.
+	resp2, _ := http.Get(srv.URL)
+	body2, _ := io.ReadAll(resp2.Body)
+	_ = resp2.Body.Close()
+	var env2 map[string]any
+	_ = json.Unmarshal(body2, &env2)
+	if env2["status"] != "ok" {
+		t.Errorf("cached status = %v, want ok (within 2s TTL)", env2["status"])
+	}
+
+	// Past TTL: degraded.
+	time.Sleep(2100 * time.Millisecond)
+	resp3, _ := http.Get(srv.URL)
+	body3, _ := io.ReadAll(resp3.Body)
+	_ = resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Errorf("post-TTL status code = %d, want 200 (degraded keeps 200)", resp3.StatusCode)
+	}
+	var env3 map[string]any
+	_ = json.Unmarshal(body3, &env3)
+	if env3["status"] != "degraded" {
+		t.Errorf("post-TTL status = %v, want degraded", env3["status"])
 	}
 }
