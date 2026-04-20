@@ -4,7 +4,7 @@
 // lands. Each subsequent plan in this phase deletes one entry from
 // this file as it adds the real code that imports the dep:
 //
-//   - sony/gobreaker/v2  → consumed by gateway/internal/breaker/breaker.go
+//   - sony/gobreaker/v2  → consumed by gateway/internal/breaker/breaker.go (DONE in 03-03)
 //   - cenkalti/backoff/v5 → consumed by gateway/internal/proxy/dispatcher.go
 //   - jackc/pgxlisten     → consumed by gateway/internal/upstreams/listen.go
 //
@@ -15,5 +15,4 @@ package breaker
 import (
 	_ "github.com/cenkalti/backoff/v5"
 	_ "github.com/jackc/pgxlisten"
-	_ "github.com/sony/gobreaker/v2"
 )
