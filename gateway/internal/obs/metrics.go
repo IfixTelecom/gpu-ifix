@@ -100,8 +100,10 @@ var ProbeFailureTotal = promauto.NewCounterVec(
 	[]string{"upstream", "reason"},
 )
 
-// UpstreamsReloadTotal counts hot-reload attempts driven by Postgres
-// LISTEN upstreams_changed. result=ok|error.
+// UpstreamsReloadTotal counts upstreams.Loader.Refresh invocations,
+// labelled by outcome ("ok" | "error"). Phase 3 D-D2 — incremented at
+// boot Refresh and on each LISTEN/NOTIFY-driven reload. Helps operators
+// detect reload storms (Pitfall 7) or persistent DB read failures.
 var UpstreamsReloadTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "gateway_upstreams_reload_total",
