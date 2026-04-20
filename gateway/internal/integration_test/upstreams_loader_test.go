@@ -10,8 +10,39 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/upstreams"
 )
+
+// resetUpstreamsTable re-enables every seeded upstream row and clears
+// any probe writebacks. Necessary because freshSchema's TRUNCATE list
+// does NOT include ai_gateway.upstreams (the 0008 seed migration is
+// idempotent but only inserts; it doesn't reset enabled=true on rows
+// previously disabled by another test in the same process). Without
+// this reset, listener tests that disable a row leak state into
+// subsequent loader tests, which then see fewer rows than expected.
+func resetUpstreamsTable(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `UPDATE ai_gateway.upstreams
+        SET enabled = TRUE,
+            tier = CASE name
+                WHEN 'local-llm' THEN 0
+                WHEN 'openrouter-chat' THEN 1
+                WHEN 'local-stt' THEN 0
+                WHEN 'openai-whisper' THEN 1
+                WHEN 'local-embed' THEN 0
+                WHEN 'openai-embed' THEN 1
+                ELSE tier
+            END,
+            circuit_config = '{}'::jsonb,
+            last_probe_at = NULL,
+            last_probe_ms = NULL,
+            last_probe_status = NULL,
+            last_probe_error = NULL`); err != nil {
+		t.Fatalf("resetUpstreamsTable: %v", err)
+	}
+}
 
 // clearUpstreamEnvs nulls the eight Phase 3 UPSTREAM_* env vars so the
 // test starts from a known baseline. Restored automatically via t.Setenv
@@ -50,6 +81,7 @@ func TestIntegration_UpstreamsLoader_RefreshLoadsSixUpstreams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool, _ := freshSchema(t, ctx)
+	resetUpstreamsTable(t, ctx, pool)
 
 	clearUpstreamEnvs(t)
 	t.Setenv("UPSTREAM_LLM_URL", "http://local-llm:8000")
@@ -150,6 +182,7 @@ func TestIntegration_UpstreamsLoader_MissingURLEnvSkipsRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool, _ := freshSchema(t, ctx)
+	resetUpstreamsTable(t, ctx, pool)
 
 	clearUpstreamEnvs(t)
 	// Only set the three local URLs; externals MUST be skipped.
@@ -192,6 +225,7 @@ func TestIntegration_UpstreamsLoader_MissingAuthBearerEnvKeepsRow(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool, _ := freshSchema(t, ctx)
+	resetUpstreamsTable(t, ctx, pool)
 
 	clearUpstreamEnvs(t)
 	t.Setenv("UPSTREAM_LLM_URL", "http://local-llm:8000")
@@ -234,6 +268,7 @@ func TestIntegration_UpstreamsLoader_AtomicSwapNoRace(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	pool, _ := freshSchema(t, ctx)
+	resetUpstreamsTable(t, ctx, pool)
 
 	clearUpstreamEnvs(t)
 	t.Setenv("UPSTREAM_LLM_URL", "http://local-llm:8000")
