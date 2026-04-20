@@ -4,9 +4,9 @@
 // lands. Each subsequent plan in this phase deletes one entry from
 // this file as it adds the real code that imports the dep:
 //
-//   - sony/gobreaker/v2  → consumed by gateway/internal/breaker/breaker.go
-//   - cenkalti/backoff/v5 → consumed by gateway/internal/proxy/dispatcher.go
-//   - jackc/pgxlisten     → consumed by gateway/internal/upstreams/listen.go
+//   - sony/gobreaker/v2  → consumed by gateway/internal/breaker/breaker.go (PENDING — Wave 2 / 03-05)
+//   - cenkalti/backoff/v5 → consumed by gateway/internal/proxy/dispatcher.go (PENDING — Wave 4 / 03-06)
+//   - jackc/pgxlisten     → consumed by gateway/internal/upstreams/listen.go (DONE — 03-04)
 //
 // When all three real consumers exist, this file MUST be deleted.
 
@@ -14,6 +14,5 @@ package breaker
 
 import (
 	_ "github.com/cenkalti/backoff/v5"
-	_ "github.com/jackc/pgxlisten"
 	_ "github.com/sony/gobreaker/v2"
 )
