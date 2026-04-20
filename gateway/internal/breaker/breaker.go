@@ -233,12 +233,20 @@ func (s *Set) publishTransition(name string, to gobreaker.State) {
 // replica's breaker transitions. We maintain a per-name overlay so
 // Execute can short-circuit without driving the local gobreaker's
 // counters to an inconsistent state.
+//
+// Note on timestamp: we record time.Now() (local-clock arrival) rather
+// than time.Unix(ev.SinceUnix, 0). The wire format SinceUnix has
+// 1-second resolution, which is too coarse for sub-second Cooldown
+// windows used in tests, and clock drift between replicas would only
+// add noise to a "did the peer trip recently?" check. Local arrival
+// time is the right semantics anyway — we trust the message but not
+// the peer's clock.
 func (s *Set) applyRemoteEvent(ev redisx.BreakerEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch ev.State {
 	case "open":
-		s.remoteOpen[ev.Upstream] = time.Unix(ev.SinceUnix, 0)
+		s.remoteOpen[ev.Upstream] = time.Now()
 	case "closed", "half-open":
 		delete(s.remoteOpen, ev.Upstream)
 	}
