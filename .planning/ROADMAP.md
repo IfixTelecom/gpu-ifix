@@ -72,8 +72,8 @@ Plans:
   5. Context window is normalized: a 20k-token prompt is rejected with the same behavior whether primary or OpenRouter is serving (both capped at 16k).
 **Plans:** 8 plans
 Plans:
-- [ ] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [ ] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
+- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
+- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
 - [ ] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
 - [ ] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
 - [ ] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
@@ -95,8 +95,8 @@ Plans:
   5. Load-test of 1000 concurrent rate-limit checks against Redis shows zero over-use (Lua-atomic).
 **Plans:** 8 plans
 Plans:
-- [ ] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [ ] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
+- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
+- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
 - [ ] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
 - [ ] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
 - [ ] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
