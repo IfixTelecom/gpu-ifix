@@ -36,3 +36,10 @@ func UpstreamOverrideFrom(ctx context.Context) string {
 	}
 	return ""
 }
+
+// UpstreamOverrideFromContext is a long-name alias of UpstreamOverrideFrom
+// kept to match the Phase 4 plan's API contract (Plan 04-06 dispatcher +
+// enforcer reference this spelling). Both forms read the same context key.
+func UpstreamOverrideFromContext(ctx context.Context) string {
+	return UpstreamOverrideFrom(ctx)
+}
