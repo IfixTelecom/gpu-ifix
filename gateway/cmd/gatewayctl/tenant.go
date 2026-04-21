@@ -313,6 +313,13 @@ func parseWindowHours(s string) (start, end int, err error) {
 	if s1 < 0 || s1 > 23 || s2 < 0 || s2 > 23 {
 		return 0, 0, fmt.Errorf("invalid --window %q; hours must be 0..23", s)
 	}
+	// ME-04 fix: start == end produces a zero-duration window that the
+	// InWindow helper treats as "never open" (e.g. 08-08 => never peak).
+	// Reject at CLI time so operators do not silently misconfigure the
+	// schedule.
+	if s1 == s2 {
+		return 0, 0, fmt.Errorf("invalid --window %q; start == end produces a zero-duration window (use 00-24 for full-day peak)", s)
+	}
 	return s1, s2, nil
 }
 
