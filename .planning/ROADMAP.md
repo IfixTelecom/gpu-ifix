@@ -96,8 +96,8 @@ Plans:
 **Plans:** 9 plans
 Plans:
 - [x] 04-01-PLAN.md — Wave 0 scaffolding: 5 sentinel-error files + tzdata import + config env vars + pkg/openai constants + operator gates (A1/A2 pricing) (TEN-03..07)
-- [ ] 04-02-PLAN.md — DB foundation: migrations 0010..0014 (billing_events partitioned, usage_counters evolve, prices+fx, tenants ALTER + chk_sensitive_no_peak, admin_keys) + 6 sqlc query files (TEN-03..07)
-- [ ] 04-03-PLAN.md — Migration 0015 seed prices + fx + per-tenant quota overrides (operator-gated values from 04-WAVE0-GATES.md) (TEN-04, TEN-05, TEN-06)
+- [x] 04-02-PLAN.md — DB foundation: migrations 0010..0014 (billing_events partitioned, usage_counters evolve, prices+fx, tenants ALTER + chk_sensitive_no_peak, admin_keys) + 6 sqlc query files (TEN-03..07)
+- [x] 04-03-PLAN.md — Migration 0015 seed prices + fx + per-tenant quota overrides (operator-gated values from 04-WAVE0-GATES.md) (TEN-04, TEN-05, TEN-06)
 - [ ] 04-04-PLAN.md — Foundation A: quota Lua bucket + counters + tenants loader + listen + schedule policy/window + 5 obs collectors (TEN-03, TEN-04, TEN-05)
 - [ ] 04-05-PLAN.md — Foundation B: billing prices/fx loaders + listen + accountant + flusher + cost helper + admin middleware/usage + dual-shape SSE usage interceptor + 4 obs collectors (TEN-06, TEN-07)
 - [ ] 04-06-PLAN.md — Middleware integration: rate-limit + quota + schedule + metrics middlewares; main.go wires loaders + listeners + flusher + boot-time invariant + per-route WriteTimeout + /admin sub-router; dispatcher upstream-override + director stream_options injection (TEN-03..06)
