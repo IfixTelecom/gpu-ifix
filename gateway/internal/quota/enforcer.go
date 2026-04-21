@@ -95,9 +95,12 @@ func RateLimitMiddleware(
 			routeClass := classifyRoute(r.URL.Path)
 			bucketCfg := BucketConfig{RPSCapacity: cfg.RPSLimit, RPMCapacity: cfg.RPMLimit}
 
-			// A bucket with 0 capacity disables the corresponding window
-			// (same semantics as 0-tokens quota → disabled). If BOTH are 0
-			// we bypass the Lua call entirely to avoid a pointless round-trip.
+			// HI-01 fix: a bucket with 0 capacity disables the corresponding
+			// window (0 tokens → dimension off). When BOTH are 0 we bypass
+			// the Lua call entirely. When only ONE is 0, we STILL call Lua
+			// — the script now short-circuits the disabled window internally
+			// (per-dimension disable) and avoids division by zero when
+			// computing reset_ms.
 			if bucketCfg.RPSCapacity <= 0 && bucketCfg.RPMCapacity <= 0 {
 				next.ServeHTTP(w, r)
 				return
