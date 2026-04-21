@@ -10,7 +10,7 @@
 - [x] **Phase 1: GPU Pod Image & Smoke-Test** — Build and validate the pre-baked inference pod image (llama.cpp + Speaches + Infinity + dcgm-exporter) with VRAM measured under load
 - [ ] **Phase 2: Gateway Core + Multi-tenant Auth** — Go gateway serves OpenAI-compatible endpoints with API key auth, data-class tagging, and idempotency — single upstream, no failover yet
 - [ ] **Phase 3: Resilience & Fallback Chain** — Circuit breakers + retries + local→OpenRouter→OpenAI fallback chain with explicit streaming policy and LGPD-safe routing for sensitive tenants
-- [ ] **Phase 4: Multi-tenant Quotas, Billing & Schedule Routing** — Rate limiting, daily/monthly quotas, token counting, cost attribution per tenant, 24/7 vs peak schedules
+- [x] **Phase 4: Multi-tenant Quotas, Billing & Schedule Routing** — Rate limiting, daily/monthly quotas, token counting, cost attribution per tenant, 24/7 vs peak schedules (COMPLETE 2026-04-21 — 3 SC LIVE UAT deferred pending ai-gateway-dev stack deploy; 04-VERIFICATION.md status=human_needed; 04-REVIEW-FIX.md closes 2 BLOCKER + 4 HIGH + 6 MEDIUM)
 - [ ] **Phase 5: Load Shedding (Saturation-aware Routing)** — Composite saturation signal (inflight + P95 + VRAM) with hysteresis overflows traffic to OpenRouter before local fails
 - [ ] **Phase 6: Auto-provisioning Emergency Pod (Vast.ai)** — Leader-elected state machine spins up emergency Vast.ai pod on sustained failure and tears it down after primary recovers
 - [ ] **Phase 7: Observability — Dashboard & Alerting** — Next.js dashboard, Prometheus metrics, WhatsApp/email alerts with severity tiers, Sentry, audit log
