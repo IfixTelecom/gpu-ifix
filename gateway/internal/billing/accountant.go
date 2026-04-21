@@ -1,8 +1,11 @@
 package billing
 
 import (
+	"context"
+	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // RequestUsage is the per-request atomic counter populated by the SSE
@@ -17,12 +20,18 @@ import (
 // model is the resolved model name captured from the SSE/JSON frame
 // (BL-01 extension). Access via Model()/SetModel() — concurrent-safe via
 // atomic.Value.
+//
+// createdAtUnixNano is the wall-clock time the slot was registered via
+// Accountant.Set. Consumed by the reaper goroutine (ME-03) to evict
+// slots older than the TTL in case the interceptor Close path never
+// ran (client abort pre-header, upstream cut without teardown, etc.).
 type RequestUsage struct {
-	TokensIn         atomic.Int64
-	TokensOut        atomic.Int64
-	AudioSecondsMs10 atomic.Int64
-	EmbedsCount      atomic.Int64
-	model            atomic.Value // string
+	TokensIn          atomic.Int64
+	TokensOut         atomic.Int64
+	AudioSecondsMs10  atomic.Int64
+	EmbedsCount       atomic.Int64
+	model             atomic.Value // string
+	createdAtUnixNano atomic.Int64
 }
 
 // Model returns the cached model name, or "" when none was set.
@@ -67,7 +76,14 @@ func NewAccountant() *Accountant {
 // Set creates a per-request usage slot. Caller (interceptor.Intercept)
 // calls this at the start of streaming. Idempotent: if reqID is already
 // registered the new pointer replaces the old one.
+//
+// ME-03 fix: Set stamps RequestUsage.createdAtUnixNano so the reaper
+// (RunReaper below) can evict slots whose Close path never fired
+// (client abort pre-header, upstream cut without teardown).
 func (a *Accountant) Set(reqID string, u *RequestUsage) {
+	if u != nil {
+		u.createdAtUnixNano.Store(time.Now().UnixNano())
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	old := *a.usages.Load()
@@ -102,4 +118,76 @@ func (a *Accountant) Delete(reqID string) {
 		}
 	}
 	a.usages.Store(&next)
+}
+
+// DefaultReapTTL is the maximum age a slot can sit in the map before
+// the reaper considers it abandoned. 5 minutes is the balance between
+// (a) long enough that a legitimately long streaming request with
+// pauses between tokens won't be swept, and (b) short enough that a
+// stuck slot never becomes an unbounded memory leak.
+const DefaultReapTTL = 5 * time.Minute
+
+// RunReaper is the background cleanup goroutine that periodically
+// scans the accountant snapshot and deletes slots older than ttl.
+// Runs for the lifetime of ctx. Designed to be called from main()
+// alongside Flusher.Run.
+//
+// ME-03 fix: without the reaper, a request whose upstream Close never
+// fires (client abort pre-header, cold connection reset, panic in the
+// interceptor chain) would leak its RequestUsage slot forever. The
+// copy-on-write semantics of Accountant.Set mean every subsequent
+// request pays O(n) map-rebuild cost for a growing n of stuck slots.
+func (a *Accountant) RunReaper(ctx context.Context, tickInterval, ttl time.Duration, log *slog.Logger) {
+	if tickInterval <= 0 {
+		tickInterval = 60 * time.Second
+	}
+	if ttl <= 0 {
+		ttl = DefaultReapTTL
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	log = log.With("module", "BILLING_REAPER")
+	tick := time.NewTicker(tickInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("accountant reaper exited")
+			return
+		case <-tick.C:
+			reaped := a.Reap(ttl)
+			if reaped > 0 {
+				log.Warn("reaped abandoned accountant slots (interceptor Close never ran)",
+					"count", reaped, "ttl", ttl)
+			}
+		}
+	}
+}
+
+// Reap atomically deletes every slot whose createdAtUnixNano is older
+// than now-ttl. Returns the number of deletions. Exported for test
+// harnesses that want deterministic control without running a goroutine.
+func (a *Accountant) Reap(ttl time.Duration) int {
+	cutoff := time.Now().Add(-ttl).UnixNano()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	old := *a.usages.Load()
+	next := make(map[string]*RequestUsage, len(old))
+	reaped := 0
+	for k, v := range old {
+		if v == nil {
+			continue
+		}
+		if v.createdAtUnixNano.Load() < cutoff {
+			reaped++
+			continue
+		}
+		next[k] = v
+	}
+	if reaped == 0 {
+		return 0
+	}
+	a.usages.Store(&next)
+	return reaped
 }

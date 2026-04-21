@@ -224,6 +224,11 @@ func main() {
 	// ALSO constructed later (they need the interceptor at
 	// NewChatProxy-time for ModifyResponse).
 	accountant := billing.NewAccountant()
+	// ME-03 fix: background reaper evicts accountant slots whose Close
+	// path never ran (client abort pre-header, cold reset, panic in
+	// the interceptor). Default TTL 5 min — longer than any plausible
+	// Whisper transcription; shorter than the memory pressure horizon.
+	go accountant.RunReaper(ctx, time.Minute, billing.DefaultReapTTL, log)
 	toolCallInterceptor := proxy.NewToolCallInterceptor()
 
 	// Idempotency store (Plan 02-06). Shares the same Redis client as auth
