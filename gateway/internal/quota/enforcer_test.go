@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
-	"github.com/ifixtelecom/gpu-ifix/gateway/internal/idempotency"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/quota"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/tenants"
 )
@@ -40,25 +39,26 @@ func TestRateLimitMiddleware_NoAuthContext_401(t *testing.T) {
 	}
 }
 
-// TestRateLimitMiddleware_ReplaySkipsBucket asserts the replay context flag
-// short-circuits the Lua check so replays never re-consume the bucket
-// (D-D1). The test uses a nil rdb — if the middleware attempted a Redis
-// call, it would panic on the nil deref; passing through silently proves
-// the skip path is taken.
-func TestRateLimitMiddleware_ReplaySkipsBucket(t *testing.T) {
+// TestRateLimitMiddleware_NoAuthReturns401 asserts that a request without
+// an auth context is rejected with 401 (auth middleware runs earlier in
+// the chain; this is a defensive guard).
+//
+// ME-02 fix: the previous test TestRateLimitMiddleware_ReplaySkipsBucket
+// asserted dead code — the idempotency middleware is mounted per-handler
+// AFTER rate-limit in the chain, so a replay never reaches the rate-
+// limit middleware. The D-D1 "replays skip rate-limit" semantic is
+// enforced by the chain ORDER, not a ctx flag.
+func TestRateLimitMiddleware_NoAuthReturns401(t *testing.T) {
 	loader := &tenants.Loader{}
-	passed := false
 	h := quota.RateLimitMiddleware(nil, loader, true, silentLog())(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			passed = true
 			w.WriteHeader(http.StatusOK)
 		}))
 	rec := httptest.NewRecorder()
-	ctx := idempotency.WithReplay(context.Background())
-	req := httptest.NewRequest("POST", "/v1/chat/completions", nil).WithContext(ctx)
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 	h.ServeHTTP(rec, req)
-	if !passed {
-		t.Fatalf("handler must run on replay; got status %d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when no auth ctx, got %d", rec.Code)
 	}
 }
 

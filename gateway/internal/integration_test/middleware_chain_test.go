@@ -11,21 +11,24 @@ import (
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
-	"github.com/ifixtelecom/gpu-ifix/gateway/internal/idempotency"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/quota"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/tenants"
 )
 
 // TestMiddlewareChainRateLimitBeforeQuota verifies the D-D1 chain order
-// contract at code level: RateLimitMiddleware runs BEFORE QuotaMiddleware,
-// and replay-flagged requests skip rate-limit but still hit quota.
+// contract at code level: RateLimitMiddleware runs BEFORE QuotaMiddleware.
 //
-// The test drives three request shapes through a minimal chain:
+// The test drives two request shapes through a minimal chain:
 //
 //  1. Normal request → both middlewares consume
 //  2. Rate-limit-exhausted request → 429, does NOT reach quota checker
-//  3. idempotency.WithReplay-flagged request → skips rate-limit; quota still
-//     runs (Stripe semantics, D-D1 "replay consumes quota").
+//
+// ME-02 note: a third case previously asserted idempotency.WithReplay
+// would skip rate-limit. That check was removed from the production
+// enforcer because the idempotency middleware is mounted per-handler
+// DOWNSTREAM of rate-limit in the chain; replays short-circuit before
+// reaching rate-limit via the IdempotencyReplayedSetter path. The ctx
+// helper remains available for future reshuffles.
 func TestMiddlewareChainRateLimitBeforeQuota(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -80,20 +83,6 @@ func TestMiddlewareChainRateLimitBeforeQuota(t *testing.T) {
 			quotaRan)
 	}
 
-	// 3) Replay-flagged request — D-D1: skips rate-limit, still hits quota.
-	// Wrap handler that sets WithReplay BEFORE the chain runs.
-	chainWithReplay := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		chain.ServeHTTP(w, r.WithContext(idempotency.WithReplay(r.Context())))
-	})
-	rec3 := httptest.NewRecorder()
-	chainWithReplay.ServeHTTP(rec3, httptest.NewRequest("POST", "/v1/chat/completions", nil))
-	if rec3.Code != http.StatusOK {
-		t.Errorf("replay request: want 200 (rate-limit skipped, quota passes), got %d body=%s",
-			rec3.Code, rec3.Body.String())
-	}
-	if quotaRan != 2 {
-		t.Errorf("replay request must still run quota; counter=%d (want 2)", quotaRan)
-	}
 }
 
 // countingMiddleware increments *counter on each call — used to assert

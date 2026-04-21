@@ -30,7 +30,6 @@ import (
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
-	"github.com/ifixtelecom/gpu-ifix/gateway/internal/idempotency"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/tenants"
 )
@@ -61,11 +60,15 @@ func RateLimitMiddleware(
 	log = log.With("module", "QUOTA")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// D-D1: replays do not re-consume the RPS/RPM bucket.
-			if idempotency.IsReplay(r.Context()) {
-				next.ServeHTTP(w, r)
-				return
-			}
+			// ME-02 fix: the idempotency middleware is mounted PER-HANDLER
+			// (chat only) DOWNSTREAM of this middleware, so a replay path
+			// never actually reaches RateLimitMiddleware — the Phase 4
+			// D-D1 "replays skip rate-limit" semantic is already enforced
+			// by the chain ORDER. The earlier idempotency.IsReplay check
+			// was dead code (idempotency.WithReplay is never called in
+			// production), so it was removed along with the replay.go
+			// file to avoid misleading auditors who would otherwise assume
+			// a behaviour that does not hold.
 
 			ac, ok := auth.FromContext(r.Context())
 			if !ok {

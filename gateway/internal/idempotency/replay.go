@@ -10,9 +10,13 @@
 // allowing replays to flow through for audit-only observability) can
 // surface the flag without redesigning the call chain.
 //
-// Callers: quota/enforcer.go reads IsReplay(ctx) before invoking the Lua
-// token-bucket check. If true, it returns early (pass-through) without
-// consulting Redis.
+// ME-02 note: after the Phase 4 review, the IsReplay check was removed
+// from quota/enforcer.go (it was dead code — no production caller ever
+// sets the flag, because the idempotency middleware is mounted
+// per-handler AFTER rate-limit in the chain, so replays short-circuit
+// BEFORE reaching any downstream middleware anyway). The helpers here
+// remain available for explicit integration-test wiring and any future
+// middleware reshuffle that routes replays through downstream middleware.
 package idempotency
 
 import "context"
