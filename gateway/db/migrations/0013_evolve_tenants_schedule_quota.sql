@@ -26,33 +26,20 @@ ALTER TABLE ai_gateway.tenants
 -- (Phase 2's data_class lives on api_keys; Phase 4 introduces a tenant-level
 -- classification per D-C1 triple-defense). Default 'normal' preserves
 -- existing behavior; 'sensitive' must be set explicitly via operator flow.
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'ai_gateway'
-          AND table_name = 'tenants'
-          AND column_name = 'data_class'
-    ) THEN
-        ALTER TABLE ai_gateway.tenants
-            ADD COLUMN data_class ai_gateway.data_class NOT NULL DEFAULT 'normal';
-    END IF;
-END $$;
+--
+-- NOTE: uses plain ALTER TABLE ADD COLUMN IF NOT EXISTS (not a DO-block) so
+-- sqlc's static analyzer sees these columns on the tenants table. PG supports
+-- IF NOT EXISTS on ADD COLUMN since 9.6, and the ai_gateway.data_class ENUM
+-- already exists from migration 0002.
+ALTER TABLE ai_gateway.tenants
+    ADD COLUMN IF NOT EXISTS data_class ai_gateway.data_class NOT NULL DEFAULT 'normal';
 
 -- Status column for ListTenantsForLoader filter (WHERE status='active').
--- Defensive ADD — created here rather than in an earlier migration to keep
--- this plan self-contained.
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'ai_gateway'
-          AND table_name = 'tenants'
-          AND column_name = 'status'
-    ) THEN
-        ALTER TABLE ai_gateway.tenants
-            ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
-                CHECK (status IN ('active', 'disabled'));
-    END IF;
-END $$;
+-- Defensive ADD -- created here rather than in an earlier migration to keep
+-- this plan self-contained. Plain ADD COLUMN IF NOT EXISTS so sqlc can see it.
+ALTER TABLE ai_gateway.tenants
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'disabled'));
 
 -- LGPD invariant (D-C1 path 2 of triple-defense). Allowed only AFTER existing
 -- rows received default mode='24/7' from the prior ALTER (which they did --

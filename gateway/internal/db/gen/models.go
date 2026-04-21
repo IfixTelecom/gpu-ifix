@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+// Admin auth: bcrypt cost 10. SHA-256 lookup hash enables PK-style fetch before bcrypt verify (Phase 2 D-A2 pattern).
+type AiGatewayAdminKey struct {
+	ID            uuid.UUID          `json:"id"`
+	KeyLookupHash []byte             `json:"key_lookup_hash"`
+	KeyHash       string             `json:"key_hash"`
+	KeyPrefix     string             `json:"key_prefix"`
+	Label         string             `json:"label"`
+	Status        string             `json:"status"`
+	CreatedAt     time.Time          `json:"created_at"`
+	RevokedAt     pgtype.Timestamptz `json:"revoked_at"`
+	LastUsedAt    pgtype.Timestamptz `json:"last_used_at"`
+}
+
 type AiGatewayApiKey struct {
 	ID            uuid.UUID          `json:"id"`
 	TenantID      uuid.UUID          `json:"tenant_id"`
@@ -56,6 +69,36 @@ type AiGatewayAuditLogContent struct {
 	Response  []byte    `json:"response"`
 }
 
+// Append-only billing events; one row per completed request. PK includes ts (partition key). Idempotent INSERT via ON CONFLICT (request_id, ts) DO NOTHING.
+type AiGatewayBillingEvent struct {
+	RequestID           uuid.UUID      `json:"request_id"`
+	Ts                  time.Time      `json:"ts"`
+	TenantID            uuid.UUID      `json:"tenant_id"`
+	ApiKeyID            pgtype.UUID    `json:"api_key_id"`
+	Route               string         `json:"route"`
+	Upstream            string         `json:"upstream"`
+	Model               string         `json:"model"`
+	TokensIn            int32          `json:"tokens_in"`
+	TokensOut           int32          `json:"tokens_out"`
+	AudioSeconds        float32        `json:"audio_seconds"`
+	EmbedsCount         int32          `json:"embeds_count"`
+	CostLocalBrl        pgtype.Numeric `json:"cost_local_brl"`
+	CostLocalPhantomBrl pgtype.Numeric `json:"cost_local_phantom_brl"`
+	CostExternalBrl     pgtype.Numeric `json:"cost_external_brl"`
+	Currency            string         `json:"currency"`
+	Source              string         `json:"source"`
+	CreatedAt           time.Time      `json:"created_at"`
+}
+
+type AiGatewayFxRate struct {
+	ID           uuid.UUID          `json:"id"`
+	CurrencyPair string             `json:"currency_pair"`
+	Rate         pgtype.Numeric     `json:"rate"`
+	ValidFrom    time.Time          `json:"valid_from"`
+	ValidTo      pgtype.Timestamptz `json:"valid_to"`
+	CreatedAt    time.Time          `json:"created_at"`
+}
+
 type AiGatewayModelAlias struct {
 	Alias     string    `json:"alias"`
 	Upstream  string    `json:"upstream"`
@@ -63,12 +106,38 @@ type AiGatewayModelAlias struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type AiGatewayPrice struct {
+	ID          uuid.UUID          `json:"id"`
+	Model       string             `json:"model"`
+	Provider    string             `json:"provider"`
+	Unit        string             `json:"unit"`
+	UnitCostUsd pgtype.Numeric     `json:"unit_cost_usd"`
+	ValidFrom   time.Time          `json:"valid_from"`
+	ValidTo     pgtype.Timestamptz `json:"valid_to"`
+	Notes       pgtype.Text        `json:"notes"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+
 type AiGatewayTenant struct {
-	ID        uuid.UUID `json:"id"`
-	Slug      string    `json:"slug"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                       uuid.UUID   `json:"id"`
+	Slug                     string      `json:"slug"`
+	Name                     string      `json:"name"`
+	CreatedAt                time.Time   `json:"created_at"`
+	UpdatedAt                time.Time   `json:"updated_at"`
+	Mode                     string      `json:"mode"`
+	PeakWindowStart          pgtype.Time `json:"peak_window_start"`
+	PeakWindowEnd            pgtype.Time `json:"peak_window_end"`
+	ScheduleTimezone         string      `json:"schedule_timezone"`
+	DailyQuotaTokens         int64       `json:"daily_quota_tokens"`
+	MonthlyQuotaTokens       int64       `json:"monthly_quota_tokens"`
+	DailyQuotaAudioMinutes   int32       `json:"daily_quota_audio_minutes"`
+	MonthlyQuotaAudioMinutes int32       `json:"monthly_quota_audio_minutes"`
+	DailyQuotaEmbeds         int32       `json:"daily_quota_embeds"`
+	MonthlyQuotaEmbeds       int32       `json:"monthly_quota_embeds"`
+	RpsLimit                 int32       `json:"rps_limit"`
+	RpmLimit                 int32       `json:"rpm_limit"`
+	DataClass                interface{} `json:"data_class"`
+	Status                   string      `json:"status"`
 }
 
 // Runtime source-of-truth for multi-upstream dispatcher (Phase 3 D-D2). Hot-reloaded via LISTEN upstreams_changed.
@@ -100,4 +169,11 @@ type AiGatewayUsageCounter struct {
 	TokensIn      int64       `json:"tokens_in"`
 	TokensOut     int64       `json:"tokens_out"`
 	RequestsCount int64       `json:"requests_count"`
+	// Cumulative audio seconds processed per (tenant, date). UPSERT delta in billing flush CTE.
+	AudioSeconds int64 `json:"audio_seconds"`
+	EmbedsCount  int64 `json:"embeds_count"`
+	// Notional OpenRouter-equivalent BRL cost; populated even when upstream was tier-0 local GPU.
+	CostLocalPhantomBrl pgtype.Numeric `json:"cost_local_phantom_brl"`
+	// Real BRL cost when upstream was tier-1+. 0 when upstream was tier-0 local.
+	CostExternalBrl pgtype.Numeric `json:"cost_external_brl"`
 }
