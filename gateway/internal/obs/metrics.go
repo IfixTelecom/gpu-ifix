@@ -142,5 +142,57 @@ var ToolCallPartialTotal = promauto.NewCounterVec(
 	[]string{"route", "upstream"},
 )
 
+// Phase 4 — billing + admin collectors (split B, Plan 04-05). The quota/
+// schedule/tenants collectors are registered by the sibling Plan 04-04.
+
+// GatewayBillingFlush counts successful billing_events writes (rows flushed),
+// labelled by source="final"|"partial". Summed rate gives billed requests/sec.
+var GatewayBillingFlush = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "gateway_billing_flush_total",
+		Help: "Billing events successfully written to billing_events, labelled by source.",
+	},
+	[]string{"source"},
+)
+
+// GatewayBillingFlushFailures counts flush failures per reason (flush, txn, etc).
+var GatewayBillingFlushFailures = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "gateway_billing_flush_failures_total",
+		Help: "Billing flush failures, labelled by reason (flush|txn|conflict).",
+	},
+	[]string{"reason"},
+)
+
+// GatewayBillingFlushDropped counts events dropped because the Flusher buffer
+// was full (back-pressure fail-safe, mirrors gateway_audit_dropped_total).
+var GatewayBillingFlushDropped = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "gateway_billing_flush_dropped_total",
+		Help: "Billing events dropped because the Flusher channel buffer was full.",
+	},
+)
+
+// GatewayPricesReload counts PricesLoader/FXLoader.Refresh invocations, labelled
+// by result=ok|error. Mirrors UpstreamsReloadTotal.
+var GatewayPricesReload = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "gateway_prices_reload_total",
+		Help: "Hot-reload attempts from LISTEN prices_changed/fx_changed. result=ok|error.",
+	},
+	[]string{"result"},
+)
+
+// GatewayAdminRequests counts /admin/* requests, labelled by route template +
+// HTTP status class (2xx|4xx|5xx). Parallel to RequestsTotal but isolated
+// namespace so admin traffic is easy to alert on.
+var GatewayAdminRequests = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "gateway_admin_requests_total",
+		Help: "Admin API requests, labelled by route template and status class.",
+	},
+	[]string{"route", "status"},
+)
+
 // Handler returns the /metrics endpoint handler.
 func Handler() http.Handler { return promhttp.Handler() }

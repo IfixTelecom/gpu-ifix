@@ -53,6 +53,15 @@ func RequestIDFrom(ctx context.Context) string {
 	return ""
 }
 
+// ContextWithRequestID injects a request_id into ctx. Exported for test
+// wiring (proxy interceptor unit tests synthesize ctxs with a known id so
+// Accountant.Set is correlated correctly). Production code uses the
+// RequestID middleware which writes the key via an unexported setter on
+// the same ctxKey constant.
+func ContextWithRequestID(ctx context.Context, rid string) context.Context {
+	return context.WithValue(ctx, requestIDKey, rid)
+}
+
 // ClientRequestIDFrom returns the client-supplied X-Request-ID if it was
 // a valid UUID, else "".
 func ClientRequestIDFrom(ctx context.Context) string {

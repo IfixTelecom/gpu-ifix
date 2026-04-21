@@ -53,6 +53,19 @@ type Event struct {
 	AudioSizeBytes int64
 	AudioDurationS float64
 	AudioLanguage  string
+	// Phase 4 extensions — billing-aware audit (additive; existing Phase 2/3
+	// callers continue to compile with zero-value defaults).
+	// These fields are NOT written to the audit_log table by the current
+	// Flush (the DB schema only has a single cost_brl column); they exist
+	// here for vocabulary alignment with billing.Event so a future writer
+	// can surface the richer cost breakdown to audit consumers without
+	// redesigning the struct. The billing pipeline is the authoritative
+	// cost store (ai_gateway.billing_events).
+	AudioSeconds        float64
+	EmbedsCount         int
+	CostLocalBRL        float64
+	CostLocalPhantomBRL float64
+	CostExternalBRL     float64
 }
 
 // flusher abstracts the actual DB write so tests can inject a fake without
