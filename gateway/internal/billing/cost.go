@@ -1,11 +1,16 @@
 package billing
 
-import "log/slog"
+import (
+	"log/slog"
+
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
+)
 
 // ComputeCostBRL is a pure helper: converts (units, USD/unit, USD/BRL) → BRL.
-// Returns 0 if the price is unknown (logs WARN so reconcile can surface the
-// drift later). If fx.Get returns (_, false) the caller-supplied defaultFx
-// is used; if defaultFx is also non-positive the result is 0.
+// Returns 0 if the price is unknown (logs WARN AND increments the Prometheus
+// counter gateway_prices_missing_total so reconcile can surface the drift
+// proactively — ME-05 fix). If fx.Get returns (_, false) the caller-supplied
+// defaultFx is used; if defaultFx is also non-positive the result is 0.
 //
 // Defensive: negative units clamp to 0. Nil loaders return 0 so a
 // mis-wired caller cannot panic the request.
@@ -28,6 +33,10 @@ func ComputeCostBRL(
 	}
 	p, ok := prices.Get(model, provider, unit)
 	if !ok {
+		// ME-05 fix: increment the Prometheus counter so dashboards
+		// can alert before drift accumulates. The WARN log remains as
+		// the narrative trail for operators tailing logs.
+		obs.GatewayPricesMissing.WithLabelValues(model, provider, unit).Inc()
 		if log != nil {
 			log.Warn("price missing — cost will be 0",
 				"model", model, "provider", provider, "unit", unit)

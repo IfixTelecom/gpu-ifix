@@ -219,6 +219,17 @@ var GatewayPricesReload = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Number of prices/fx config reloads triggered by NOTIFY, labeled by result (ok|error).",
 }, []string{"result"})
 
+// GatewayPricesMissing counts price-lookup misses during cost attribution.
+// Labels: model, provider, unit. ME-05 fix — surfaces cost drift that
+// would otherwise accumulate silently in billing_events.cost_external_brl
+// between a new-model deploy and the corresponding INSERT into prices.
+// Cardinality budget: (model × provider × unit) — kept bounded by the
+// small Phase 4 model catalog.
+var GatewayPricesMissing = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "gateway_prices_missing_total",
+	Help: "Number of cost-attribution calls that could not resolve a price row, labeled by (model, provider, unit). Non-zero indicates billing drift.",
+}, []string{"model", "provider", "unit"})
+
 // GatewayAdminRequests counts admin endpoint requests served. Labels:
 // route, status class.
 var GatewayAdminRequests = promauto.NewCounterVec(prometheus.CounterOpts{
