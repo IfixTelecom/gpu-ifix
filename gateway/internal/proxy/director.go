@@ -12,8 +12,12 @@
 package proxy
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
 )
@@ -55,4 +59,76 @@ func BuildDirector(upstream *url.URL) func(*http.Request) {
 			r.Header.Del("X-Request-ID")
 		}
 	}
+}
+
+// injectStreamOptionsIncludeUsage rewrites a /v1/chat/completions JSON body
+// to guarantee `"stream_options": {"include_usage": true}` when the client
+// asked for `"stream": true` (Pitfall 5 — usage chunks are required for
+// cost attribution on streaming responses; OpenRouter/OpenAI omit the
+// final usage block unless this flag is set).
+//
+// Semantics:
+//   - `stream=false` or absent → body returned unchanged.
+//   - `stream=true` with no stream_options → injects {"include_usage":true}.
+//   - `stream=true` with a stream_options object already present →
+//     sets include_usage=true only if absent, preserving any other
+//     client-supplied fields.
+//   - Malformed JSON → returned unchanged (upstream will 4xx; breaker's
+//     IsSuccessful treats 4xx as non-failure so breaker stays CLOSED).
+//
+// Callers are expected to run this AFTER any other body rewrites (e.g.
+// OpenRouter's provider.order injection) so they share one allocation
+// cycle — see BuildOpenRouterDirector.
+func injectStreamOptionsIncludeUsage(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return body
+	}
+	streamRaw, ok := m["stream"]
+	if !ok {
+		return body
+	}
+	var streaming bool
+	if err := json.Unmarshal(streamRaw, &streaming); err != nil || !streaming {
+		return body
+	}
+	// Merge into an existing stream_options object if present, otherwise
+	// insert a fresh one.
+	var opts map[string]json.RawMessage
+	if existing, present := m["stream_options"]; present {
+		if err := json.Unmarshal(existing, &opts); err != nil || opts == nil {
+			opts = map[string]json.RawMessage{}
+		}
+	} else {
+		opts = map[string]json.RawMessage{}
+	}
+	if _, hasInclude := opts["include_usage"]; !hasInclude {
+		opts["include_usage"] = json.RawMessage("true")
+	} else {
+		// Already set by client; do not override.
+		return body
+	}
+	optsBytes, err := json.Marshal(opts)
+	if err != nil {
+		return body
+	}
+	m["stream_options"] = optsBytes
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+// rewriteRequestBody replaces r.Body with a fresh io.NopCloser over the
+// given bytes AND syncs ContentLength + Content-Length header so upstream
+// sees consistent metadata. Shared helper for the director body-rewrite
+// paths (OpenRouter provider.order + stream_options.include_usage).
+func rewriteRequestBody(r *http.Request, b []byte) {
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	r.ContentLength = int64(len(b))
+	r.Header.Set("Content-Length", strconv.Itoa(len(b)))
 }
