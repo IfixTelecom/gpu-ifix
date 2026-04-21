@@ -11,7 +11,16 @@ import (
 )
 
 type Querier interface {
-	CreateTenant(ctx context.Context, arg CreateTenantParams) (AiGatewayTenant, error)
+	// Used by boot-time bootstrap: if 0, generate and INSERT a random admin key.
+	CountActiveAdminKeys(ctx context.Context) (int64, error)
+	// Boot-time defensive check (D-C1 path 3). The CHECK constraint should make
+	// this impossible. If COUNT > 0, gateway os.Exit(1).
+	CountSensitivePeakInvariant(ctx context.Context) (int64, error)
+	CreateTenant(ctx context.Context, arg CreateTenantParams) (CreateTenantRow, error)
+	ExpireActiveFX(ctx context.Context, currencyPair string) error
+	// Called inside the `gatewayctl prices set` transaction before InsertPrice.
+	// Closes any currently-active row for (model, provider, unit) by setting valid_to=now().
+	ExpireActivePrice(ctx context.Context, arg ExpireActivePriceParams) error
 	GetAPIKeyByID(ctx context.Context, id uuid.UUID) (GetAPIKeyByIDRow, error)
 	// HOT PATH query (Codex review [HIGH] 02-03). Given the SHA-256 of a raw key,
 	// return the single active row (or no rows). 02-03's Verify then runs
@@ -19,19 +28,49 @@ type Querier interface {
 	// a scan. The UNIQUE INDEX on key_lookup_hash guarantees ≤1 candidate row
 	// regardless of the total active-key count.
 	GetActiveKeyByLookupHash(ctx context.Context, keyLookupHash []byte) (GetActiveKeyByLookupHashRow, error)
+	// Hot-path verify: PK-style fetch via SHA-256 lookup hash, then bcrypt verify
+	// happens at the application layer (Phase 2 D-A2 pattern).
+	GetAdminKeyByLookupHash(ctx context.Context, keyLookupHash []byte) (AiGatewayAdminKey, error)
+	// Returns the currently-active fx rate for a pair (e.g., 'USD/BRL').
+	GetCurrentFX(ctx context.Context, currencyPair string) (AiGatewayFxRate, error)
 	GetModelAlias(ctx context.Context, alias string) (AiGatewayModelAlias, error)
-	GetTenantBySlug(ctx context.Context, slug string) (AiGatewayTenant, error)
+	GetTenantBySlug(ctx context.Context, slug string) (GetTenantBySlugRow, error)
+	// Hot-path: single PK lookup of full tenant config including new Phase 4 columns.
+	GetTenantConfig(ctx context.Context, id uuid.UUID) (GetTenantConfigRow, error)
 	// Used by gatewayctl upstreams update/enable/disable to verify the name
 	// exists before mutating.
 	GetUpstreamByName(ctx context.Context, name string) (AiGatewayUpstream, error)
+	// Monthly quota check: SUM rows for the calendar month containing today
+	// in America/Sao_Paulo.
+	GetUsageCountersMonth(ctx context.Context, tenantID uuid.UUID) (GetUsageCountersMonthRow, error)
+	// Hot-path quota check: PK read on (tenant_id, date) where date is today in
+	// America/Sao_Paulo. Returns zero-value row if no rows exist (caller falls
+	// through to per-tenant default quota).
+	GetUsageCountersToday(ctx context.Context, tenantID uuid.UUID) (GetUsageCountersTodayRow, error)
 	// key_lookup_hash is the SHA-256 (raw bytes) of the full raw key. Computed by
 	// auth.GenerateAPIKey in 02-03; stored indexed for fast lookup on the hot path
 	// (Codex review [HIGH] 02-03).
 	InsertAPIKey(ctx context.Context, arg InsertAPIKeyParams) (InsertAPIKeyRow, error)
+	// Used by `gatewayctl admin-key create` and the boot-time bootstrap.
+	InsertAdminKey(ctx context.Context, arg InsertAdminKeyParams) (InsertAdminKeyRow, error)
 	// Only called for data_class = 'normal' rows. Sensitive tenants leave
 	// this table untouched (CONTEXT.md D-B2). Batch metadata inserts for
 	// audit_log use pgx.CopyFrom directly (see gateway/internal/audit).
 	InsertAuditLogContent(ctx context.Context, arg InsertAuditLogContentParams) error
+	// Atomic insert into billing_events + UPSERT delta into usage_counters in a
+	// single statement (no application-level txn needed). The CTE prevents the
+	// replay double-count described in RESEARCH §Pitfall 7: when ON CONFLICT
+	// (request_id, ts) DO NOTHING fires, the CTE returns zero rows, so the
+	// usage_counters UPSERT also no-ops.
+	//
+	// IMPORTANT: timezone idiom is `(now() AT TIME ZONE 'America/Sao_Paulo')::date`
+	// (the alternative "CURRENT_DATE" + tz form documented in RESEARCH §Anti-Patterns
+	// is invalid SQL; do NOT use it).
+	InsertBillingEvent(ctx context.Context, arg InsertBillingEventParams) error
+	InsertFX(ctx context.Context, arg InsertFXParams) (InsertFXRow, error)
+	// Inserts a new active price row. Combined with ExpireActivePrice in one txn,
+	// this performs an atomic price swap. Returns the new row's id.
+	InsertPrice(ctx context.Context, arg InsertPriceParams) (InsertPriceRow, error)
 	// Legacy / diagnostic path. RETAINED for: (a) admin-tooling listing all keys;
 	// (b) backfill / repair migration that recomputes key_lookup_hash if it ever
 	// gets corrupted. MUST NOT be called on the request hot path — 02-03 Verify
@@ -41,6 +80,12 @@ type Querier interface {
 	// path uses GetActiveKeyByLookupHash, which hits the UNIQUE index and returns
 	// at most one row (Codex review [HIGH] 02-03).
 	ListActiveKeysByTenant(ctx context.Context, tenantID uuid.UUID) ([]ListActiveKeysByTenantRow, error)
+	// Hot-path: load all currently-active prices at boot and on NOTIFY prices_changed.
+	ListActivePrices(ctx context.Context) ([]AiGatewayPrice, error)
+	ListAdminKeys(ctx context.Context) ([]ListAdminKeysRow, error)
+	ListAllFX(ctx context.Context) ([]AiGatewayFxRate, error)
+	// For `gatewayctl prices list --all` -- historical view.
+	ListAllPrices(ctx context.Context) ([]AiGatewayPrice, error)
 	// Admin surface (gatewayctl upstreams list). Returns every row regardless
 	// of enabled state so the operator can re-enable disabled upstreams.
 	ListAllUpstreams(ctx context.Context) ([]AiGatewayUpstream, error)
@@ -49,14 +94,33 @@ type Querier interface {
 	// deterministically build tier-0/tier-1 maps.
 	ListEnabledUpstreams(ctx context.Context) ([]AiGatewayUpstream, error)
 	ListModelAliases(ctx context.Context) ([]AiGatewayModelAlias, error)
-	ListTenants(ctx context.Context) ([]AiGatewayTenant, error)
+	ListTenants(ctx context.Context) ([]ListTenantsRow, error)
+	// Bulk load at boot + on NOTIFY tenants_changed. Same columns as GetTenantConfig.
+	ListTenantsForLoader(ctx context.Context) ([]ListTenantsForLoaderRow, error)
+	// Used by `gatewayctl billing reconcile --apply`: rewrites today's counter row
+	// from the SUM(billing_events). Idempotent; safe to call repeatedly.
+	ResetUsageCountersForReconcile(ctx context.Context, arg ResetUsageCountersForReconcileParams) error
 	RevokeAPIKey(ctx context.Context, id uuid.UUID) error
+	RevokeAdminKey(ctx context.Context, id uuid.UUID) error
 	// Shortcut for enable/disable subcommands.
 	SetUpstreamEnabled(ctx context.Context, arg SetUpstreamEnabledParams) error
+	// Authoritative aggregation for GET /admin/usage (D-D2 -- query billing_events,
+	// NOT usage_counters cache). granularity='day' -- frontend can re-aggregate.
+	SumBillingEventsByDate(ctx context.Context, arg SumBillingEventsByDateParams) ([]SumBillingEventsByDateRow, error)
+	// Aggregate over the entire range -- for the `summary` field.
+	SumBillingEventsRange(ctx context.Context, arg SumBillingEventsRangeParams) (SumBillingEventsRangeRow, error)
+	// Updated periodically by middleware (low frequency; ok in hot path occasionally).
+	TouchAdminKeyLastUsed(ctx context.Context, id uuid.UUID) error
 	// NOT called per-request by 02-03 (Codex review [MEDIUM] 02-03 — TouchKeyLastUsed
 	// is debounced via an in-memory buffer flushing every 60s or on shutdown). This
 	// sqlc query remains the low-level write path used by that buffer.
 	TouchKeyLastUsed(ctx context.Context, id uuid.UUID) error
+	// Used by `gatewayctl tenant set-mode`. CHECK constraint chk_sensitive_no_peak
+	// rejects sensitive+peak at the DB layer (D-C1 path 2). The CLI also rejects
+	// pre-DB (path 1) for a clearer error message.
+	UpdateTenantMode(ctx context.Context, arg UpdateTenantModeParams) error
+	// Partial UPDATE -- fields passed as NULL via sqlc.narg are left unchanged.
+	UpdateTenantQuota(ctx context.Context, arg UpdateTenantQuotaParams) error
 	// Called by gatewayctl upstreams update <name> --tier=N --enabled=true
 	// --circuit-failures=5. Triggers NOTIFY via notify_upstreams_changed() (migration 0009)
 	// which the listen goroutine consumes to reload config.

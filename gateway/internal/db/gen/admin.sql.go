@@ -23,9 +23,17 @@ type CreateTenantParams struct {
 	Name string `json:"name"`
 }
 
-func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (AiGatewayTenant, error) {
+type CreateTenantRow struct {
+	ID        uuid.UUID `json:"id"`
+	Slug      string    `json:"slug"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (CreateTenantRow, error) {
 	row := q.db.QueryRow(ctx, createTenant, arg.Slug, arg.Name)
-	var i AiGatewayTenant
+	var i CreateTenantRow
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
@@ -40,9 +48,17 @@ const getTenantBySlug = `-- name: GetTenantBySlug :one
 SELECT id, slug, name, created_at, updated_at FROM ai_gateway.tenants WHERE slug = $1
 `
 
-func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (AiGatewayTenant, error) {
+type GetTenantBySlugRow struct {
+	ID        uuid.UUID `json:"id"`
+	Slug      string    `json:"slug"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (GetTenantBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getTenantBySlug, slug)
-	var i AiGatewayTenant
+	var i GetTenantBySlugRow
 	err := row.Scan(
 		&i.ID,
 		&i.Slug,
@@ -111,15 +127,23 @@ const listTenants = `-- name: ListTenants :many
 SELECT id, slug, name, created_at, updated_at FROM ai_gateway.tenants ORDER BY created_at DESC
 `
 
-func (q *Queries) ListTenants(ctx context.Context) ([]AiGatewayTenant, error) {
+type ListTenantsRow struct {
+	ID        uuid.UUID `json:"id"`
+	Slug      string    `json:"slug"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (q *Queries) ListTenants(ctx context.Context) ([]ListTenantsRow, error) {
 	rows, err := q.db.Query(ctx, listTenants)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AiGatewayTenant
+	var items []ListTenantsRow
 	for rows.Next() {
-		var i AiGatewayTenant
+		var i ListTenantsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Slug,

@@ -1,7 +1,18 @@
 version: "2"
 sql:
   - engine: postgresql
-    queries: db/queries
+    queries:
+      - db/queries/upstreams.sql
+      - db/queries/audit.sql
+      - db/queries/auth.sql
+      - db/queries/admin.sql
+      - db/queries/model_aliases.sql
+      - db/queries/billing.sql
+      - db/queries/usage_counters.sql
+      - db/queries/prices.sql
+      - db/queries/fx_rates.sql
+      - db/queries/tenants_admin.sql
+      - db/queries/admin_keys.sql
     schema: db/migrations
     gen:
       go:
