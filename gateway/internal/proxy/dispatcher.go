@@ -2,8 +2,11 @@
 // One handler per role (llm / stt / embed) — at request time:
 //
 //  1. enforce token cap (chat=16k, embed=8k); 400 on over-cap
+//
 //  2. detect stream:true (chat-specific)
+//
 //  3. resolve tier-0 upstream via upstreams.Loader
+//
 //  4. consult breaker.Set state to choose dispatch path:
 //
 //     | tier-0 state | data_class | streaming | action                                         |
@@ -75,6 +78,22 @@ func NewDispatcher(cfg DispatcherConfig) http.Handler {
 			httpx.WriteOpenAIError(w, http.StatusUnauthorized,
 				"authentication_error", "no_api_key",
 				"Authenticated tenant required.")
+			return
+		}
+
+		// Phase 4 — schedule middleware override (D-C2). When a tenant is
+		// in peak mode AND outside its business window, the schedule
+		// middleware (gateway/internal/schedule/middleware.go) wrote an
+		// upstream_override onto the request context. This block forces
+		// the corresponding upstream, bypassing tier-0 entirely (the GPU
+		// may be suspended off-hours — its breaker state is irrelevant).
+		//
+		// NOT a fallback chain: if the override target is OPEN we return
+		// 503 off_hours_upstream_unavailable immediately. Per D-C2 the
+		// off-hours block on external = fail-fast; no local retry.
+		if override := auditctx.UpstreamOverrideFromContext(r.Context()); override != "" &&
+			override != UpstreamBlockedSensitiveValue {
+			cfg.dispatchOverride(w, r, override, log)
 			return
 		}
 
@@ -166,6 +185,49 @@ func NewDispatcher(cfg DispatcherConfig) http.Handler {
 		}
 		cfg.dispatchTo(w, r, t1.Name, streaming, log)
 	})
+}
+
+// dispatchOverride routes to a specific upstream when the schedule
+// middleware has set ctx.upstream_override (Phase 4 D-C2). Unlike
+// dispatchTo, this path:
+//
+//   - does NOT consult the tier-0 breaker (GPU may be suspended
+//     off-hours; its state is irrelevant);
+//   - DOES consult the override target's breaker — if OPEN, emits 503
+//     off_hours_upstream_unavailable (no fallback of fallback per D-C2);
+//   - skips token-count + streaming detection done by the normal path
+//     — the override target (OpenRouter) enforces its own context cap
+//     and the streaming flag is carried in the body regardless.
+func (cfg DispatcherConfig) dispatchOverride(w http.ResponseWriter, r *http.Request, name string, log *slog.Logger) {
+	// Check the override target's breaker. If CLOSED or HALF_OPEN we
+	// dispatch; if OPEN the tenant is peak-mode off-hours and has no
+	// viable upstream — fail fast with the D-C2 envelope.
+	if cb, found := cfg.Breaker.Get(name); found && cb != nil && cb.State() == gobreaker.StateOpen {
+		log.Warn("off-hours external unavailable; fail-fast",
+			"upstream", name,
+			"request_id", httpx.RequestIDFrom(r.Context()),
+		)
+		httpx.WriteOpenAIError(w, http.StatusServiceUnavailable,
+			"service_unavailable", "off_hours_upstream_unavailable",
+			"Tenant in peak mode and off-hours external upstream unavailable.")
+		return
+	}
+	proxy, ok := cfg.Proxies[name]
+	if !ok {
+		log.Warn("override target has no registered proxy; fail-fast",
+			"upstream", name,
+			"request_id", httpx.RequestIDFrom(r.Context()),
+		)
+		httpx.WriteOpenAIError(w, http.StatusServiceUnavailable,
+			"service_unavailable", "off_hours_upstream_unavailable",
+			"Off-hours external upstream not configured.")
+		return
+	}
+	log.Debug("dispatching via upstream_override",
+		"upstream", name,
+		"request_id", httpx.RequestIDFrom(r.Context()),
+	)
+	proxy.ServeHTTP(w, r)
 }
 
 // dispatchTo invokes the named upstream's proxy handler. Logs the

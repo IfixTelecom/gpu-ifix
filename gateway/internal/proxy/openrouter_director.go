@@ -63,6 +63,13 @@ func BuildOpenRouterDirector(upstream *url.URL, authBearer string, providerOrder
 			r.ContentLength = int64(len(body))
 			return
 		}
+		// Pitfall 5 — ensure usage chunks arrive in streaming for cost
+		// attribution. OpenRouter mirrors OpenAI: the final {"usage":...}
+		// chunk is omitted on streaming responses unless
+		// stream_options.include_usage=true is set on the request. Inject
+		// the flag defensively here when the client asked to stream but
+		// did NOT set the option themselves (if they did, we respect it).
+		patched = injectStreamOptionsIncludeUsage(patched)
 		r.Body = io.NopCloser(bytes.NewReader(patched))
 		r.ContentLength = int64(len(patched))
 		r.Header.Set("Content-Length", strconv.Itoa(len(patched)))
