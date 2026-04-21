@@ -85,6 +85,7 @@ type proxies struct {
 	adminVerifier     *admin.Verifier
 	rdb               redis.UniversalClient
 	rateLimitFailOpen bool
+	quotaFailOpen     bool
 }
 
 func main() {
@@ -505,6 +506,7 @@ func main() {
 		adminVerifier:     adminVerifier,
 		rdb:               rdb,
 		rateLimitFailOpen: cfg.RateLimitFailOpen,
+		quotaFailOpen:     cfg.QuotaFailOpen,
 	})
 
 	srv := &http.Server{
@@ -612,7 +614,7 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 			pg.Use(quota.RateLimitMiddleware(px.rdb, px.tenantsLoader, px.rateLimitFailOpen, log))
 		}
 		if px.quotaChecker != nil && px.tenantsLoader != nil {
-			pg.Use(quota.QuotaMiddleware(px.quotaChecker, px.tenantsLoader, log))
+			pg.Use(quota.QuotaMiddleware(px.quotaChecker, px.tenantsLoader, px.quotaFailOpen, log))
 		}
 		if px.tenantsLoader != nil {
 			pg.Use(schedule.Middleware(px.tenantsLoader, log))

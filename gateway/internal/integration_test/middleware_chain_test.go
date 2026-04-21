@@ -52,7 +52,7 @@ func TestMiddlewareChainRateLimitBeforeQuota(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	// Build chain: rate-limit → quota → counter. Matches main.go order.
-	chain := quota.QuotaMiddleware(checker, loader, discardLogger())(
+	chain := quota.QuotaMiddleware(checker, loader, false, discardLogger())(
 		countingMiddleware(&quotaRan)(counter),
 	)
 	chain = quota.RateLimitMiddleware(rdb, loader, false, discardLogger())(chain)

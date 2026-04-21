@@ -94,7 +94,7 @@ func TestQuotaMiddleware_NoAuthPassesThrough(t *testing.T) {
 	loader := &tenants.Loader{}
 	checker := quota.NewQuotaChecker(nil, silentLog()) // nil queries — never reached
 	passed := false
-	h := quota.QuotaMiddleware(checker, loader, silentLog())(
+	h := quota.QuotaMiddleware(checker, loader, false, silentLog())(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			passed = true
 		}))
@@ -112,7 +112,7 @@ func TestQuotaMiddleware_TenantUnknownPassesThrough(t *testing.T) {
 	loader := &tenants.Loader{} // nil snapshot
 	checker := quota.NewQuotaChecker(nil, silentLog())
 	passed := false
-	h := quota.QuotaMiddleware(checker, loader, silentLog())(
+	h := quota.QuotaMiddleware(checker, loader, false, silentLog())(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			passed = true
 		}))

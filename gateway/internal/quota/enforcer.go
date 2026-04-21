@@ -169,16 +169,23 @@ func RateLimitMiddleware(
 	}
 }
 
-// QuotaMiddleware enforces daily + monthly quotas per tenant. Fail-closed
-// per D-A2: any DB failure returns 503 quota_check_unavailable (refusing
-// to risk runaway external cost). Checks even on idempotency replays per
-// D-D1 (Stripe canonical: every served request consumes quota).
+// QuotaMiddleware enforces daily + monthly quotas per tenant. Default is
+// fail-closed per D-A2: any DB failure returns 503 quota_check_unavailable
+// (refusing to risk runaway external cost). When failOpen=true is supplied
+// (ME-01 fix — wired via cfg.QuotaFailOpen) the middleware passes through
+// on ErrQuotaCheckUnavailable instead — the RUNBOOK-QUOTAS-BILLING.md
+// documents this as an emergency override when Postgres is unreachable
+// for >5 min.
+//
+// Checks even on idempotency replays per D-D1 (Stripe canonical: every
+// served request consumes quota).
 //
 // On rejection emits HTTP 429 with type=insufficient_quota + code matching
 // the sentinel (quota_exceeded_daily_tokens, etc.).
 func QuotaMiddleware(
 	checker *QuotaChecker,
 	loader *tenants.Loader,
+	failOpen bool,
 	log *slog.Logger,
 ) func(http.Handler) http.Handler {
 	if log == nil {
@@ -213,11 +220,17 @@ func QuotaMiddleware(
 				MonthlyEmbeds:       cfg.MonthlyQuotaEmbeds,
 			}
 			if qerr := checker.CheckQuotaToday(r.Context(), tenantID, lim); qerr != nil {
-				handleQuotaError(w, cfg.Slug, qerr, "daily")
+				if handleQuotaError(w, cfg.Slug, qerr, "daily", failOpen, log) {
+					next.ServeHTTP(w, r)
+					return
+				}
 				return
 			}
 			if qerr := checker.CheckQuotaMonth(r.Context(), tenantID, lim); qerr != nil {
-				handleQuotaError(w, cfg.Slug, qerr, "monthly")
+				if handleQuotaError(w, cfg.Slug, qerr, "monthly", failOpen, log) {
+					next.ServeHTTP(w, r)
+					return
+				}
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -226,16 +239,28 @@ func QuotaMiddleware(
 }
 
 // handleQuotaError emits the OpenAI envelope + metric increment for a
-// quota-check failure. Check-unavailable collapses to 503; every other
-// sentinel maps to 429 insufficient_quota with its code.
-func handleQuotaError(w http.ResponseWriter, tenantSlug string, err error, period string) {
-	// ErrQuotaCheckUnavailable: fail-closed 503.
+// quota-check failure. Check-unavailable collapses to 503 (or
+// pass-through when failOpen=true); every other sentinel maps to 429
+// insufficient_quota with its code.
+//
+// Returns true when the caller should invoke next.ServeHTTP(w, r) (fail-
+// open emergency path). false means the response was already written.
+func handleQuotaError(w http.ResponseWriter, tenantSlug string, err error, period string, failOpen bool, log *slog.Logger) bool {
+	// ErrQuotaCheckUnavailable: fail-closed 503 OR fail-open pass-through
+	// per cfg.QuotaFailOpen (ME-01 fix).
 	if err == ErrQuotaCheckUnavailable {
 		obs.GatewayQuotaCheckFailures.WithLabelValues(period).Inc()
+		if failOpen {
+			if log != nil {
+				log.Warn("quota check unavailable; failing open (AI_GATEWAY_QUOTA_FAIL_OPEN=true)",
+					"tenant", tenantSlug, "period", period)
+			}
+			return true
+		}
 		httpx.WriteOpenAIError(w, http.StatusServiceUnavailable,
 			"service_unavailable", "quota_check_unavailable",
 			"Quota check unavailable; refusing to risk runaway external cost.")
-		return
+		return false
 	}
 	// Map sentinel → wire code + dimension label.
 	code := ErrorCode(err)
@@ -243,6 +268,7 @@ func handleQuotaError(w http.ResponseWriter, tenantSlug string, err error, perio
 	obs.GatewayQuotaRejected.WithLabelValues(tenantSlug, dimension, period).Inc()
 	httpx.WriteOpenAIError(w, http.StatusTooManyRequests,
 		"insufficient_quota", code, "Quota exceeded.")
+	return false
 }
 
 // dimensionOf maps a quota sentinel to its dimension label for metrics.
