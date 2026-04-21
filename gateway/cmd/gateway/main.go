@@ -816,8 +816,15 @@ func bootstrapAdminKey(ctx context.Context, pool *pgxpool.Pool, bootstrap string
 		}
 		bootstrap = "ifix_admin_" + hex.EncodeToString(buf)
 		label = "bootstrap-random"
-		log.Warn("ROTATE THIS KEY IMMEDIATELY: bootstrap admin key generated",
-			"key", bootstrap)
+		// ME-06 fix: previously the key was logged via slog with
+		// attribute name "key" — which is NOT in the Redactor
+		// allow-list, so the plaintext key would flow unredacted to
+		// Sentry/Portainer/any structured-log sink. Emit to stderr as
+		// plain text (plus a slog marker without the key itself) so
+		// operators capture the key once from console but the
+		// structured log pipeline never sees it.
+		fmt.Fprintf(os.Stderr, "\n*** ROTATE THIS KEY IMMEDIATELY ***\nbootstrap admin key: %s\n*** one-time display; subsequent boots will not reprint ***\n\n", bootstrap)
+		log.Warn("bootstrap admin key generated; see stderr for the one-time display. ROTATE via `gatewayctl admin-key create` + revoke-bootstrap.")
 	}
 	sum := sha256.Sum256([]byte(bootstrap))
 	bcryptHash, err := bcrypt.GenerateFromPassword([]byte(bootstrap), 10)
