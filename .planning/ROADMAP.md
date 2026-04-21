@@ -93,16 +93,17 @@ Plans:
   3. An admin can call a reporting endpoint and retrieve `{tenant, tokens, minutes, embeds, cost_local, cost_external, cost_total}` for any date range.
   4. A tenant configured `mode=peak` has requests routed to OpenRouter between 22:00 and 08:00 local time automatically; a tenant in `mode=24/7` stays on local primary at all hours.
   5. Load-test of 1000 concurrent rate-limit checks against Redis shows zero over-use (Lua-atomic).
-**Plans:** 8 plans
+**Plans:** 9 plans
 Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [x] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [x] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [x] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [x] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [x] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [x] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+- [ ] 04-01-PLAN.md — Wave 0 scaffolding: 5 sentinel-error files + tzdata import + config env vars + pkg/openai constants + operator gates (A1/A2 pricing) (TEN-03..07)
+- [ ] 04-02-PLAN.md — DB foundation: migrations 0010..0014 (billing_events partitioned, usage_counters evolve, prices+fx, tenants ALTER + chk_sensitive_no_peak, admin_keys) + 6 sqlc query files (TEN-03..07)
+- [ ] 04-03-PLAN.md — Migration 0015 seed prices + fx + per-tenant quota overrides (operator-gated values from 04-WAVE0-GATES.md) (TEN-04, TEN-05, TEN-06)
+- [ ] 04-04-PLAN.md — Foundation A: quota Lua bucket + counters + tenants loader + listen + schedule policy/window + 5 obs collectors (TEN-03, TEN-04, TEN-05)
+- [ ] 04-05-PLAN.md — Foundation B: billing prices/fx loaders + listen + accountant + flusher + cost helper + admin middleware/usage + dual-shape SSE usage interceptor + 4 obs collectors (TEN-06, TEN-07)
+- [ ] 04-06-PLAN.md — Middleware integration: rate-limit + quota + schedule + metrics middlewares; main.go wires loaders + listeners + flusher + boot-time invariant + per-route WriteTimeout + /admin sub-router; dispatcher upstream-override + director stream_options injection (TEN-03..06)
+- [ ] 04-07-PLAN.md — gatewayctl subcommands: tenant set-mode/set-quota + prices set/list/set-fx + billing reconcile + usage report + admin-key create/revoke/list (TEN-04..07)
+- [ ] 04-08-PLAN.md — Integration tests (testcontainers): SC-1/3/5 + sensitive+peak triple-defense + hot-reload (prices, fx, tenants) + reconcile drift + middleware chain replay semantics (TEN-03..07)
+- [ ] 04-09-PLAN.md — HUMAN-UAT: SC-1 LIVE rate-limit headers + SC-4 LIVE peak routing + Sentry breadcrumbs + RUNBOOK-QUOTAS-BILLING.md (TEN-03..07)
 **Research hint:** no (Redis Lua rate-limit is standard; only open question is Postgres DO headroom for billing writes — covered by batching)
 **UI hint:** no
 
