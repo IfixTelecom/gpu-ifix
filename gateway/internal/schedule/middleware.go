@@ -21,6 +21,7 @@ import (
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auditctx"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/tenants"
 )
@@ -74,6 +75,26 @@ func Middleware(loader *tenants.Loader, log *slog.Logger) func(http.Handler) htt
 			ctx := r.Context()
 			tier := DecideUpstreamTier(cfg, time.Now())
 			if name := upstreamForTier(tier); name != "" {
+				// HI-03 fix (Phase 4 review): defence-in-depth against a
+				// sensitive+peak tenant sneaking past the DB CHECK
+				// constraint (e.g. `SET session_replication_role=replica`
+				// during a migration, or an operator ALTER TABLE that drops
+				// chk_sensitive_no_peak). Boot-time CheckSensitivePeakInvariant
+				// is ONE shot; subsequent refreshes only WARN. If the
+				// tenant's data_class == sensitive at this point, the DB
+				// state is invalid — fail-fast on the request with the
+				// Phase 3 sensitive envelope rather than routing it to
+				// OpenRouter and violating LGPD.
+				if cfg.DataClass == "sensitive" {
+					log.Error("sensitive tenant in peak mode at request time; CHECK constraint bypassed",
+						"tenant", cfg.Slug)
+					obs.GatewayScheduleRouting.WithLabelValues(cfg.Slug, "blocked_sensitive_peak").Inc()
+					w.Header().Set("Retry-After", "30")
+					httpx.WriteOpenAIError(w, http.StatusServiceUnavailable,
+						"service_unavailable", "upstream_unavailable_for_sensitive_tenant",
+						"Sensitive tenant cannot be routed to external providers.")
+					return
+				}
 				ctx = auditctx.WithUpstreamOverride(ctx, name)
 				obs.GatewayScheduleRouting.WithLabelValues(cfg.Slug, "off_hours_external").Inc()
 				log.Debug("schedule override",
