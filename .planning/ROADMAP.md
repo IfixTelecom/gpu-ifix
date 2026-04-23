@@ -118,14 +118,14 @@ Plans:
   4. During shedding, one tenant's burst does not starve other tenants — per-tenant inflight quotas keep smaller apps responsive while overflow from the noisy tenant hits OpenRouter.
 **Plans:** 8 plans
 Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [x] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [x] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [x] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [x] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [x] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [ ] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+- [ ] 05-01-PLAN.md — Wave 0 scaffolding: promote expfmt direct + vegeta dep + sentinel errors (shed, dcgm) + 14 obs collectors + auditctx shed helpers + 3 operator gates (LSH-01..05)
+- [ ] 05-02-PLAN.md — DB foundation: migrations 0016/0017/(0018 conditional) + TenantConfig/CircuitConfig struct extensions + sqlc UpdateTenantShedLimits (LSH-02, LSH-04, LSH-05)
+- [ ] 05-03-PLAN.md — shed package core: FSM 4-state (atomic.Int32 + CAS) + LatencyRing + InflightRegistry + Set aggregator + unit tests (LSH-01, LSH-02, LSH-03)
+- [ ] 05-04-PLAN.md — dcgm.Scraper: HTTP poller with expfmt parser + 3-strikes fail-open + sanity bounds (LSH-02)
+- [ ] 05-05-PLAN.md — redisx/shed.go + mirror publish + Subscribe + ReconcileLoop (Pitfall 3 forward-compat Fase 6) + RunTicker with shed-force override (LSH-03, LSH-04)
+- [ ] 05-06-PLAN.md — shed.Middleware + dispatcher precedence (tier-1 unavailable 503 with hardcoded Retry-After:30) + main.go wiring of 4 goroutines (LSH-01..05)
+- [ ] 05-07-PLAN.md — gatewayctl shed-state + shed-force + thresholds set (JSONB merge) + tenant set-shed-limits (LSH-04, LSH-05)
+- [ ] 05-08-PLAN.md — integration tests: SC-1 burst + SC-2 hysteresis (opt-in slow) + SC-3 hot-reload + SC-4 anti-starvation + 5 edge cases + mirror convergence (LSH-01..05)
 **Research hint:** yes (real saturation thresholds must be tuned from Phase 1 baseline data; histeresis window needs empirical validation)
 **UI hint:** no
 
