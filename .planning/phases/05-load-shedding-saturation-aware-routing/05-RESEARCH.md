@@ -1357,32 +1357,37 @@ var GatewayDcgmScrapeFailures = promauto.NewCounterVec(prometheus.CounterOpts{
 
 **If this table is empty:** N/A — há 5 assumptions + 3 verified-as-fact claims. Plan ou discuss-phase deve validar A1, A2, A3 antes de execute.
 
-## Open Questions
+## Open Questions (RESOLVED — Wave 0 operator gates + tag strategy)
 
 1. **Exato slugs dos 6 tenants conhecidos no ambiente live**
    - What we know: STATE.md lista "ConverseAI, Telefonia, Campanhas, voice-api, Chat Ifix, Cobranças" como nomes human-readable.
    - What's unclear: se slugs de DB são exatamente `telefonia`, `converseai`, etc. ou variantes (`voice-api` vs `voice_api` vs `voiceapi`).
    - Recommendation: Plan Wave 0 task: `psql -c "SELECT slug FROM ai_gateway.tenants WHERE status='active';"` e ajustar migration 0016 seed UPDATE conforme. Alternativa: migration ignora seed e deixar operator rodar `gatewayctl tenant set-shed-limits` pós-deploy.
+   - **RESOLVED:** Plan 01 Task 1.3 Gate B (Wave 0 operator gate) executa o `psql` e ajusta seed/migration 0016 antes de prosseguir.
 
 2. **Tipo da coluna `audit_log.upstream` (ENUM vs TEXT)**
    - What we know: Fase 2 D-B3 criou audit_log schema; CONTEXT.md D-D4 diz "migration 0018 se for ENUM".
    - What's unclear: qual dos dois.
    - Recommendation: Wave 0 task verificar: `psql -c "\d ai_gateway.audit_log"`. Se ENUM → migration `0018`; se TEXT sem CHECK → skip migration (doc-only). Se TEXT com CHECK → migration 0018 ajusta CHECK.
+   - **RESOLVED:** Plan 01 Task 1.3 Gate A (Wave 0 operator gate) inspeciona `\d ai_gateway.audit_log` e decide entre migration 0018 / skip / CHECK adjust.
 
 3. **DCGM_EXPORTER_URL endpoint configurado no ambiente**
    - What we know: Pod expõe :9400 (Phase 1). Gateway está na VPS dev (178.156.150.21). Pod é Vast.ai (IP privado resolvido pelo operator).
    - What's unclear: o IP/hostname exato a colocar em `DCGM_EXPORTER_URL` no Portainer stack.
    - Recommendation: Plan inclui Wave 0 env check + operator gate "confirmar DCGM_EXPORTER_URL no Portainer stack antes de deploy Fase 5".
+   - **RESOLVED:** Plan 01 Task 1.3 Gate C (Wave 0 operator gate) confirma `DCGM_EXPORTER_URL` no Portainer stack antes do deploy.
 
 4. **Cobertura do integration test SC-2 oscillation (120s duration)**
    - What we know: CONTEXT.md Claude's Discretion aceita 120s como exception to "tests <30s".
    - What's unclear: se CI aceita ou precisa ser opt-in tag (`go test -tags=integration_long`).
    - Recommendation: Plan decide tag strategy. Provável: `-tags=integration,slow` com CI rodando full só em nightly + pre-release.
+   - **RESOLVED:** Plan 08 adota a build tag `integration_slow` para o SC-2 oscillation test (120s); CI default roda `-tags=integration` (rápido), nightly/pre-release roda `-tags=integration,integration_slow`.
 
 5. **Threshold de `priority_tier` em Phase 5 (metadata only) vs v2 preemption**
    - What we know: CONTEXT.md D-B2 diz "metadata only em Phase 5", preemption deferred.
    - What's unclear: se `gatewayctl tenant set-shed-limits --tier X` deve permitir alterar tier mesmo que v1 não use — sim; metadata é lido por Fase 7 dashboard.
    - Recommendation: Plan explicita que CLI aceita --tier mesmo sendo metadata, para Fase 7 consumir.
+   - **RESOLVED:** Plan 07 inclui flag `--tier` em `gatewayctl tenant set-shed-limits` (metadata-only em Phase 5; consumido por Fase 7 dashboard).
 
 ## Environment Availability
 
