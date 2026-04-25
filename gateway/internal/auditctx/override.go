@@ -67,3 +67,53 @@ func BillingUpstreamFrom(ctx context.Context) string {
 	}
 	return ""
 }
+
+// shedDecisionKey is a dedicated context key for the routing decision taken
+// by shed middleware (CONTEXT D-B4). Distinct from upstreamOverrideKey used
+// by schedule/dispatcher because audit needs BOTH signals — schedule routes
+// "off-hours" to tier-1 AND shed routes "saturated" to tier-1, but the
+// dashboard must distinguish them.
+type shedDecisionKey struct{}
+
+// WithShedDecision stamps the shed middleware's decision on the request
+// context. Used by audit middleware to differentiate
+// "upstream=openrouter-chat because schedule off-hours" vs
+// "upstream=openrouter-chat because shed_saturated" in audit_log.
+//
+// Valid values: "passed" | "skipped_peak_offhours" | "shed_saturated" |
+// "shed_blocked_sensitive" | "shed_tier1_unavailable".
+func WithShedDecision(parent context.Context, decision string) context.Context {
+	return context.WithValue(parent, shedDecisionKey{}, decision)
+}
+
+// ShedDecisionFromContext returns the shed decision stamped by the
+// middleware. Returns "" if no middleware decision was recorded.
+func ShedDecisionFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(shedDecisionKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// Phase 5 — audit_log.upstream reserved values (D-D4). Used by shed
+// middleware + dispatcher to stamp distinct causes for identical-wire
+// 503 responses OR tier-1 shed routing, letting audit_log disambiguate
+// "openrouter-chat because breaker" vs "openrouter-chat because shed".
+const (
+	// UpstreamShedSaturatedValue is written when tier-0 FSM=ON and a
+	// normal tenant exceeds its local_inflight_max_<role>; request is
+	// routed to tier-1 (openrouter-chat) with this label in audit.
+	UpstreamShedSaturatedValue = "shed_saturated"
+
+	// UpstreamShedBlockedSensitiveValue is written when a sensitive-data
+	// tenant hits the same FSM=ON + cap path; request is NOT routed to
+	// tier-1 (LGPD); 503 with code "upstream_saturated_for_sensitive_tenant"
+	// is returned and this label stamps the audit row (D-B3).
+	UpstreamShedBlockedSensitiveValue = "shed_blocked_sensitive"
+
+	// UpstreamShedTier1UnavailableValue is written when tier-0 sheds to
+	// tier-1 but tier-1 itself is breaker-OPEN or 429; 503 with code
+	// "all_chat_upstreams_saturated" is returned and this label stamps
+	// the audit row (D-D1).
+	UpstreamShedTier1UnavailableValue = "shed_tier1_unavailable"
+)

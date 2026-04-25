@@ -63,6 +63,16 @@ type Config struct {
 	BreakerConsecutiveFailures int // BREAKER_CONSECUTIVE_FAILURES (default 3)
 	BreakerCooldownSeconds     int // BREAKER_COOLDOWN_SECONDS (default 30)
 
+	// Phase 5 — saturation-aware shedding runtime tuning (CONTEXT D-A3 /
+	// Claude's Discretion). All five vars are optional; empty DCGMExporterURL
+	// disables the VRAM signal so the 2-of-3 composite reduces to a 1-of-2
+	// majority over inflight+P95 until the pod exporter is reachable.
+	DCGMExporterURL          string // DCGM_EXPORTER_URL — pod :9400/metrics URL; empty = VRAM signal disabled
+	ShedLatencyRingSize      int    // SHED_LATENCY_RING_SIZE (default 200) — samples retained per-upstream latency ring
+	ShedTickIntervalMs       int    // SHED_TICK_INTERVAL_MS (default 1000) — FSM evaluation cadence
+	ShedDcgmScrapeIntervalMs int    // SHED_DCGM_SCRAPE_INTERVAL_MS (default 5000) — pod VRAM poll cadence
+	ShedDcgmTimeoutMs        int    // SHED_DCGM_TIMEOUT_MS (default 2000) — HTTP client timeout for scrape
+
 	// Phase 3 — Per-route WriteTimeout (folded todo from Phase 2; D-A1 Plumbing).
 	// Replaces the single WriteTimeout=0 default; chat MUST stay 0 for SSE
 	// but non-streaming routes get slow-client-DoS defense.
@@ -148,6 +158,13 @@ func Load() (Config, error) {
 		ProbeBudgetSeconds:         atoiOr(os.Getenv("PROBE_BUDGET_SECONDS"), 5),
 		BreakerConsecutiveFailures: atoiOr(os.Getenv("BREAKER_CONSECUTIVE_FAILURES"), 3),
 		BreakerCooldownSeconds:     atoiOr(os.Getenv("BREAKER_COOLDOWN_SECONDS"), 30),
+
+		// Phase 5 — shedding (CONTEXT.md D-A3). All five opt-in; no boot dep.
+		DCGMExporterURL:          envOr("DCGM_EXPORTER_URL", ""),
+		ShedLatencyRingSize:      atoiOr(os.Getenv("SHED_LATENCY_RING_SIZE"), 200),
+		ShedTickIntervalMs:       atoiOr(os.Getenv("SHED_TICK_INTERVAL_MS"), 1000),
+		ShedDcgmScrapeIntervalMs: atoiOr(os.Getenv("SHED_DCGM_SCRAPE_INTERVAL_MS"), 5000),
+		ShedDcgmTimeoutMs:        atoiOr(os.Getenv("SHED_DCGM_TIMEOUT_MS"), 2000),
 
 		WriteTimeoutChat:  time.Duration(atoiOr(os.Getenv("WRITE_TIMEOUT_CHAT_SECONDS"), 0)) * time.Second,
 		WriteTimeoutEmbed: time.Duration(atoiOr(os.Getenv("WRITE_TIMEOUT_EMBED_SECONDS"), 30)) * time.Second,
