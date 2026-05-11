@@ -13,6 +13,7 @@ import (
 //   - Phase 1/2: 0001-0006 (tenants, api_keys, audit_log, model_aliases, usage_counters skeleton)
 //   - Phase 3: 0007-0009 (upstreams + seed + NOTIFY trigger)
 //   - Phase 4: 0010-0015 (billing_events, usage_counters evolve, prices+fx, tenants schedule/quota, admin_keys, seed)
+//   - Phase 5: 0016-0018 (tenants shedding limits, upstreams shed thresholds, audit_log shed values docs-only)
 //
 // When adding migrations, append the filename to the want slice; the test
 // fails if a migration is missing, out of order, or unexpected.
@@ -44,6 +45,9 @@ func TestEmbedFS_HasAllMigrations(t *testing.T) {
 		"0013_evolve_tenants_schedule_quota.sql",
 		"0014_create_admin_keys.sql",
 		"0015_seed_prices_and_quotas.sql",
+		"0016_evolve_tenants_shedding_limits.sql",
+		"0017_evolve_upstreams_shed_thresholds.sql",
+		"0018_audit_log_shed_values.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("expected %d migrations embedded, got %d: %v", len(want), len(names), names)
