@@ -118,7 +118,13 @@ func runShedState(ctx context.Context, args []string, log *slog.Logger) int {
 			ForceState:  forceState,
 		}
 		if hasForce {
-			r.ForceTTLSeconds = int64(forceTTL / time.Second)
+			// Round-to-nearest second so an override with <500ms
+			// remaining displays "1" (not "0"). Plain integer
+			// truncation (forceTTL / time.Second) made operators
+			// see "TTL_S=0 but FORCE still active" for ~1s before
+			// expiry — confusing and indistinguishable from a bug
+			// (WR-01).
+			r.ForceTTLSeconds = int64((forceTTL + time.Second/2) / time.Second)
 		}
 		rows = append(rows, r)
 	}
