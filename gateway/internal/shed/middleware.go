@@ -239,7 +239,14 @@ func Middleware(d MiddlewareDeps, log *slog.Logger) func(http.Handler) http.Hand
 			log.Debug("shed routed to tier-1",
 				"tenant", tcfg.Slug, "from", t0.Name, "to", t1.Name,
 				"inflight", inflight, "cap", capRole)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			// Mutate the request in place so the audit middleware
+			// (which reads r.Context() AFTER next returns, using the
+			// same *http.Request pointer it captured upstream) sees
+			// the shed_decision + upstream_override stamps. Same
+			// pattern as Branches 10a/10b above and
+			// proxy.dispatcher.writeSensitiveBlock.
+			*r = *r.WithContext(ctx)
+			next.ServeHTTP(w, r)
 		})
 	}
 }
