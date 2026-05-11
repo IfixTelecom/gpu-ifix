@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,6 +73,18 @@ func (l *Loader) Refresh(ctx context.Context) error {
 		ordered:    make([]UpstreamConfig, 0, len(rows)),
 	}
 	for _, r := range rows {
+		// Phase 5 / WR-02: reject upstream names starting with "force:"
+		// because they collide with the gw:shed:force:{upstream} Redis
+		// namespace used by the shed-force operator override. A row named
+		// "force:something" would write its state mirror to
+		// gw:shed:force:something — indistinguishable from a real
+		// override key and silently filtered out by AllShedStateKeys.
+		if strings.HasPrefix(r.Name, "force:") {
+			l.log.Warn("upstream name reserved (collides with gw:shed:force:* namespace); row skipped",
+				"upstream", r.Name,
+				"status", "reserved_name")
+			continue
+		}
 		url := os.Getenv(r.UrlEnv)
 		if url == "" {
 			l.log.Warn("upstream url env var missing; row skipped",
