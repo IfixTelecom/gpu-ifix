@@ -35,6 +35,8 @@ SELECT id, slug, name, data_class, status, mode,
        daily_quota_audio_minutes, monthly_quota_audio_minutes,
        daily_quota_embeds, monthly_quota_embeds,
        rps_limit, rpm_limit,
+       local_inflight_max_llm, local_inflight_max_stt, local_inflight_max_embed,
+       priority_tier,
        created_at, updated_at
 FROM ai_gateway.tenants
 WHERE id = $1
@@ -58,11 +60,15 @@ type GetTenantConfigRow struct {
 	MonthlyQuotaEmbeds       int32       `json:"monthly_quota_embeds"`
 	RpsLimit                 int32       `json:"rps_limit"`
 	RpmLimit                 int32       `json:"rpm_limit"`
+	LocalInflightMaxLlm      int32       `json:"local_inflight_max_llm"`
+	LocalInflightMaxStt      int32       `json:"local_inflight_max_stt"`
+	LocalInflightMaxEmbed    int32       `json:"local_inflight_max_embed"`
+	PriorityTier             string      `json:"priority_tier"`
 	CreatedAt                time.Time   `json:"created_at"`
 	UpdatedAt                time.Time   `json:"updated_at"`
 }
 
-// Hot-path: single PK lookup of full tenant config including new Phase 4 columns.
+// Hot-path: single PK lookup of full tenant config including Phase 4 + Phase 5 columns.
 func (q *Queries) GetTenantConfig(ctx context.Context, id uuid.UUID) (GetTenantConfigRow, error) {
 	row := q.db.QueryRow(ctx, getTenantConfig, id)
 	var i GetTenantConfigRow
@@ -84,6 +90,10 @@ func (q *Queries) GetTenantConfig(ctx context.Context, id uuid.UUID) (GetTenantC
 		&i.MonthlyQuotaEmbeds,
 		&i.RpsLimit,
 		&i.RpmLimit,
+		&i.LocalInflightMaxLlm,
+		&i.LocalInflightMaxStt,
+		&i.LocalInflightMaxEmbed,
+		&i.PriorityTier,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -96,7 +106,9 @@ SELECT id, slug, name, data_class, status, mode,
        daily_quota_tokens, monthly_quota_tokens,
        daily_quota_audio_minutes, monthly_quota_audio_minutes,
        daily_quota_embeds, monthly_quota_embeds,
-       rps_limit, rpm_limit
+       rps_limit, rpm_limit,
+       local_inflight_max_llm, local_inflight_max_stt, local_inflight_max_embed,
+       priority_tier
 FROM ai_gateway.tenants
 WHERE status = 'active'
 ORDER BY slug
@@ -120,6 +132,10 @@ type ListTenantsForLoaderRow struct {
 	MonthlyQuotaEmbeds       int32       `json:"monthly_quota_embeds"`
 	RpsLimit                 int32       `json:"rps_limit"`
 	RpmLimit                 int32       `json:"rpm_limit"`
+	LocalInflightMaxLlm      int32       `json:"local_inflight_max_llm"`
+	LocalInflightMaxStt      int32       `json:"local_inflight_max_stt"`
+	LocalInflightMaxEmbed    int32       `json:"local_inflight_max_embed"`
+	PriorityTier             string      `json:"priority_tier"`
 }
 
 // Bulk load at boot + on NOTIFY tenants_changed. Same columns as GetTenantConfig.
@@ -150,6 +166,10 @@ func (q *Queries) ListTenantsForLoader(ctx context.Context) ([]ListTenantsForLoa
 			&i.MonthlyQuotaEmbeds,
 			&i.RpsLimit,
 			&i.RpmLimit,
+			&i.LocalInflightMaxLlm,
+			&i.LocalInflightMaxStt,
+			&i.LocalInflightMaxEmbed,
+			&i.PriorityTier,
 		); err != nil {
 			return nil, err
 		}
@@ -231,6 +251,41 @@ func (q *Queries) UpdateTenantQuota(ctx context.Context, arg UpdateTenantQuotaPa
 		arg.MonthlyQuotaEmbeds,
 		arg.RpsLimit,
 		arg.RpmLimit,
+	)
+	return err
+}
+
+const updateTenantShedLimits = `-- name: UpdateTenantShedLimits :exec
+UPDATE ai_gateway.tenants
+SET local_inflight_max_llm   = COALESCE($2::int,   local_inflight_max_llm),
+    local_inflight_max_stt   = COALESCE($3::int,   local_inflight_max_stt),
+    local_inflight_max_embed = COALESCE($4::int, local_inflight_max_embed),
+    priority_tier            = COALESCE($5::text,           priority_tier),
+    updated_at               = now()
+WHERE slug = $1
+`
+
+type UpdateTenantShedLimitsParams struct {
+	Slug                  string      `json:"slug"`
+	LocalInflightMaxLlm   pgtype.Int4 `json:"local_inflight_max_llm"`
+	LocalInflightMaxStt   pgtype.Int4 `json:"local_inflight_max_stt"`
+	LocalInflightMaxEmbed pgtype.Int4 `json:"local_inflight_max_embed"`
+	PriorityTier          pgtype.Text `json:"priority_tier"`
+}
+
+// Phase 5 — partial UPDATE for per-tenant shed limits (D-B1 / D-B2). Fields
+// passed as NULL via sqlc.narg are left unchanged. Used by
+// `gatewayctl tenant set-shed-limits` (Plan 05-07). The trigger
+// tenants_update_notify (expanded in migration 0016) fires NOTIFY
+// tenants_changed when any of these columns IS DISTINCT, so the running
+// gateway picks the new caps up within <2s (SC-3 budget).
+func (q *Queries) UpdateTenantShedLimits(ctx context.Context, arg UpdateTenantShedLimitsParams) error {
+	_, err := q.db.Exec(ctx, updateTenantShedLimits,
+		arg.Slug,
+		arg.LocalInflightMaxLlm,
+		arg.LocalInflightMaxStt,
+		arg.LocalInflightMaxEmbed,
+		arg.PriorityTier,
 	)
 	return err
 }

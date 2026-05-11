@@ -35,7 +35,7 @@ type Querier interface {
 	GetCurrentFX(ctx context.Context, currencyPair string) (AiGatewayFxRate, error)
 	GetModelAlias(ctx context.Context, alias string) (AiGatewayModelAlias, error)
 	GetTenantBySlug(ctx context.Context, slug string) (GetTenantBySlugRow, error)
-	// Hot-path: single PK lookup of full tenant config including new Phase 4 columns.
+	// Hot-path: single PK lookup of full tenant config including Phase 4 + Phase 5 columns.
 	GetTenantConfig(ctx context.Context, id uuid.UUID) (GetTenantConfigRow, error)
 	// Used by gatewayctl upstreams update/enable/disable to verify the name
 	// exists before mutating.
@@ -121,6 +121,13 @@ type Querier interface {
 	UpdateTenantMode(ctx context.Context, arg UpdateTenantModeParams) error
 	// Partial UPDATE -- fields passed as NULL via sqlc.narg are left unchanged.
 	UpdateTenantQuota(ctx context.Context, arg UpdateTenantQuotaParams) error
+	// Phase 5 — partial UPDATE for per-tenant shed limits (D-B1 / D-B2). Fields
+	// passed as NULL via sqlc.narg are left unchanged. Used by
+	// `gatewayctl tenant set-shed-limits` (Plan 05-07). The trigger
+	// tenants_update_notify (expanded in migration 0016) fires NOTIFY
+	// tenants_changed when any of these columns IS DISTINCT, so the running
+	// gateway picks the new caps up within <2s (SC-3 budget).
+	UpdateTenantShedLimits(ctx context.Context, arg UpdateTenantShedLimitsParams) error
 	// Called by gatewayctl upstreams update <name> --tier=N --enabled=true
 	// --circuit-failures=5. Triggers NOTIFY via notify_upstreams_changed() (migration 0009)
 	// which the listen goroutine consumes to reload config.

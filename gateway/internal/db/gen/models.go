@@ -138,6 +138,10 @@ type AiGatewayTenant struct {
 	RpmLimit                 int32       `json:"rpm_limit"`
 	DataClass                interface{} `json:"data_class"`
 	Status                   string      `json:"status"`
+	LocalInflightMaxLlm      int32       `json:"local_inflight_max_llm"`
+	LocalInflightMaxStt      int32       `json:"local_inflight_max_stt"`
+	LocalInflightMaxEmbed    int32       `json:"local_inflight_max_embed"`
+	PriorityTier             string      `json:"priority_tier"`
 }
 
 // Runtime source-of-truth for multi-upstream dispatcher (Phase 3 D-D2). Hot-reloaded via LISTEN upstreams_changed.
