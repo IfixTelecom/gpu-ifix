@@ -25,13 +25,16 @@ Usage:
 
 Commands:
   migrate           Apply or revert Postgres migrations.
-  tenant            Create tenants, set mode (24/7 or peak), set per-tenant quotas.
+  tenant            Create tenants, set mode (24/7 or peak), set per-tenant quotas + shed limits.
   key               Create and revoke API keys.
   upstreams         List, update, enable, or disable rows in ai_gateway.upstreams.
   prices            Set / list / set-fx for ai_gateway.prices and fx_rates (hot-reload via NOTIFY).
   billing           Reconcile usage_counters cache against authoritative billing_events.
   usage             Report per-tenant billing breakdown (day granularity, json|table).
   admin-key         Create / revoke / list X-Admin-Key bcrypt credentials.
+  shed-state        Phase 5: print shed FSM state for all upstreams (read-only).
+  shed-force        Phase 5: force shed FSM on|off|clear via gw:shed:force:* (TTL <= 1h).
+  thresholds        Phase 5: tune shed thresholds via JSONB merge on upstreams.circuit_config.
   audit             Export audit-log partitions to MinIO cold storage (Plan 02-09).
 
 Use "gatewayctl <command> --help" for subcommand flags.
@@ -66,6 +69,12 @@ func main() {
 		os.Exit(runUsage(ctx, args, log))
 	case "admin-key":
 		os.Exit(runAdminKey(ctx, args, log))
+	case "shed-state":
+		os.Exit(runShedState(ctx, args, log))
+	case "shed-force":
+		os.Exit(runShedForce(ctx, args, log))
+	case "thresholds":
+		os.Exit(runThresholds(ctx, args, log))
 	case "audit":
 		fmt.Fprintln(os.Stderr, "gatewayctl audit: not yet implemented (Plan 02-09)")
 		os.Exit(1)
