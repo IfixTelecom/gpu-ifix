@@ -273,11 +273,26 @@ func newShedStackInternal(t *testing.T, useDCGM bool) *ShedStack {
 // seedTenantWithKey inserts a tenant by slug with the given DataClass
 // and creates an API key whose raw value the test can use in HTTP
 // headers. Stored in stack.tenants + stack.apiKeys for later lookup.
+//
+// IMPORTANT: setup_test.go's seedTenantAndKey persists data_class on the
+// API key only — not on the tenants row. Phase 5 sensitive-tenant logic
+// (D-B3) reads data_class from the TENANT, so we explicitly UPDATE
+// ai_gateway.tenants here. This keeps tenants.data_class and
+// api_keys.data_class consistent without requiring a setup_test.go
+// patch (which the worktree envelope forbids).
 func (s *ShedStack) seedTenantWithKey(slug string, dc auth.DataClass) {
 	s.T.Helper()
 	tenantID, _, raw := seedTenantAndKey(s.T, s.Ctx, s.Pool, slug, dc)
 	s.tenants[slug] = tenantID
 	s.apiKeys[slug] = raw
+	// Sync tenants.data_class so shed.Middleware D-B3 logic reads the
+	// expected class. Tenants.data_class is an ai_gateway.data_class ENUM
+	// added by migration 0013.
+	if _, err := s.Pool.Exec(s.Ctx,
+		`UPDATE ai_gateway.tenants SET data_class = $1::ai_gateway.data_class WHERE id = $2`,
+		string(dc), tenantID); err != nil {
+		s.T.Fatalf("sync tenant data_class for %s: %v", slug, err)
+	}
 }
 
 // ApiKey returns the raw API key seeded for the given tenant slug.
