@@ -297,6 +297,17 @@ var GatewayShedMirrorFailures = promauto.NewCounter(prometheus.CounterOpts{
 	Help: "Count of Redis HSET/PUBLISH failures mirroring shed state. FSMs keep operating in-process (D-C3).",
 })
 
+// GatewayShedMirrorDropped counts FSM transitions that were not
+// mirrored because the bounded publish worker pool was saturated
+// (WR-03). Bumped when MakePublishTransition's job channel is full —
+// a non-blocking signal that the gateway is mid-incident with FSM
+// flapping. Non-zero rate indicates a configuration issue (thresholds
+// too tight, hysteresis too short) rather than a Redis outage.
+var GatewayShedMirrorDropped = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "gateway_shed_mirror_dropped_total",
+	Help: "Count of FSM transitions dropped because the publish worker pool was saturated (WR-03).",
+})
+
 // GatewayShedMirrorReconcile counts periodic HGETALL reconcile outcomes
 // (RESEARCH Pitfall 3 mitigation: boot may start in OFF while another
 // replica is ON). result=ok|diverged|error.

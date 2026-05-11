@@ -381,8 +381,12 @@ func main() {
 				P95Ms:    p95,
 				VramMiB:  vramMiB,
 			}
-			// Fire-and-forget publish — does not block the FSM tick.
-			go pubTransition(upstream, to, reason, sig)
+			// Fire-and-forget publish — dispatches to the bounded
+			// worker pool inside MakePublishTransition (WR-03). The
+			// call itself is non-blocking; saturation bumps
+			// GatewayShedMirrorDropped rather than spawning a new
+			// goroutine for every transition.
+			pubTransition(upstream, to, reason, sig)
 		},
 	})
 	shedSet.Rebuild(upstreamNames)
