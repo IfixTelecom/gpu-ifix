@@ -31,7 +31,7 @@ import (
 // exit code.
 func runTenant(ctx context.Context, args []string, log *slog.Logger) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: gatewayctl tenant <create|set-mode|set-quota> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: gatewayctl tenant <create|set-mode|set-quota|set-shed-limits> [flags]")
 		return 2
 	}
 	switch args[0] {
@@ -41,6 +41,10 @@ func runTenant(ctx context.Context, args []string, log *slog.Logger) int {
 		return runTenantSetMode(ctx, args[1:], log)
 	case "set-quota":
 		return runTenantSetQuota(ctx, args[1:], log)
+	case "set-shed-limits":
+		// Phase 5 — partial UPDATE of per-tenant shed caps + priority tier
+		// (CONTEXT.md D-B1 / D-B2). Implemented in tenants_shed.go.
+		return runTenantSetShedLimits(ctx, args[1:], log)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown tenant subcommand: %s\n", args[0])
 		return 2
