@@ -36,10 +36,32 @@ type UpstreamConfig struct {
 // CooldownS is the on-disk representation (seconds, JSON-friendly);
 // Cooldown is the parsed time.Duration computed by parseCircuitConfig and
 // is NOT serialized back to JSON (json:"-").
+//
+// Phase 5 saturation fields (Shed*) follow the same wire pattern: the
+// *Seconds variant is what migration 0017 writes to JSONB; the derived
+// time.Duration fields (ShedArm, ShedRecover) are computed in
+// parseCircuitConfig and are NOT serialized back. Zero values disable the
+// shed feature for the upstream (shed.fsm.Evaluate skips evaluation when
+// ShedInflightMax <= 0).
+//
+// CRITICAL UNIT NOTE: ShedVramUsedMiB is in MiB (DCGM_FI_DEV_FB_USED
+// native unit; RESEARCH.md Pitfall 1). Migration 0017 writes 21504 (=21 GB)
+// — never write a bytes value here.
 type CircuitConfig struct {
 	Failures  uint32        `json:"failures,omitempty"`
 	Cooldown  time.Duration `json:"-"`
 	CooldownS int           `json:"cooldown_s,omitempty"` // DB stores seconds
+
+	// Phase 5 — saturation thresholds (D-A4). Zero values disable shedding
+	// for this upstream. shed_vram_used_mib is the JSON wire name (NOT
+	// shed_vram_used_bytes — see RESEARCH.md Pitfall 1).
+	ShedInflightMax    int           `json:"shed_inflight_max,omitempty"`
+	ShedP95Ms          int           `json:"shed_p95_ms,omitempty"`
+	ShedVramUsedMiB    int64         `json:"shed_vram_used_mib,omitempty"`
+	ShedArmSeconds     int           `json:"shed_arm_seconds,omitempty"`
+	ShedRecoverSeconds int           `json:"shed_recover_seconds,omitempty"`
+	ShedArm            time.Duration `json:"-"` // derived from ShedArmSeconds
+	ShedRecover        time.Duration `json:"-"` // derived from ShedRecoverSeconds
 }
 
 // RoleTier keys the by-role-tier snapshot map. String-serializable for
@@ -68,5 +90,10 @@ func parseCircuitConfig(raw []byte) CircuitConfig {
 		return CircuitConfig{} // swallow parse errors; defaults will apply
 	}
 	cc.Cooldown = time.Duration(cc.CooldownS) * time.Second
+	// Phase 5 — derive time.Duration helpers from on-disk seconds.
+	// Zero ShedArmSeconds / ShedRecoverSeconds means "disabled" — the FSM
+	// hand-rolled in internal/shed/fsm.go skips evaluation in that case.
+	cc.ShedArm = time.Duration(cc.ShedArmSeconds) * time.Second
+	cc.ShedRecover = time.Duration(cc.ShedRecoverSeconds) * time.Second
 	return cc
 }

@@ -44,4 +44,13 @@ type TenantConfig struct {
 	// Rate limits feeding quota.BucketConfig.
 	RPSLimit int
 	RPMLimit int
+
+	// Phase 5 — fairness per-tenant hard caps (D-B1 / D-B2). Zero value
+	// means "no cap configured"; the shed middleware treats that as
+	// default-cap-for-role (see shed.middleware.defaultCapForRole).
+	// PriorityTier is metadata-only in v1 — preemption is deferred.
+	LocalInflightMaxLLM   int
+	LocalInflightMaxSTT   int
+	LocalInflightMaxEmbed int
+	PriorityTier          string // "S" | "A" | "B"
 }

@@ -103,6 +103,11 @@ func (l *Loader) Refresh(ctx context.Context) error {
 			MonthlyQuotaEmbeds:       int(r.MonthlyQuotaEmbeds),
 			RPSLimit:                 int(r.RpsLimit),
 			RPMLimit:                 int(r.RpmLimit),
+			// Phase 5 — fairness per-tenant hard caps (D-B1 / D-B2).
+			LocalInflightMaxLLM:   int(r.LocalInflightMaxLlm),
+			LocalInflightMaxSTT:   int(r.LocalInflightMaxStt),
+			LocalInflightMaxEmbed: int(r.LocalInflightMaxEmbed),
+			PriorityTier:          r.PriorityTier,
 		}
 		s.byID[r.ID] = cfg
 		s.bySlug[r.Slug] = cfg
