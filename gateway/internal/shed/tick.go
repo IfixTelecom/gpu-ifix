@@ -142,6 +142,14 @@ func (d *TickerDeps) runOneTick(ctx context.Context, now time.Time, log *slog.Lo
 					// with its normal evaluation. We still skip the
 					// rest of this tick to avoid double-evaluating
 					// a malformed override.
+					//
+					// Reset the gauge to 0 so the malformed entry
+					// does NOT leave the dashboard stuck at "active"
+					// until the malformed key expires (CR-02): an
+					// active gauge should reflect a successfully
+					// applied override, not the existence of a
+					// malformed value.
+					obs.GatewayShedForceActive.WithLabelValues(upstream).Set(0)
 					log.Warn("malformed shed-force value; ignoring", "upstream", upstream, "value", state)
 					return
 				}
