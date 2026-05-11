@@ -123,7 +123,7 @@ Plans:
 - [x] 05-03-PLAN.md — shed package core: FSM 4-state (atomic.Int32 + CAS) + LatencyRing + InflightRegistry + Set aggregator + unit tests (LSH-01, LSH-02, LSH-03)
 - [x] 05-04-PLAN.md — dcgm.Scraper: HTTP poller with expfmt parser + 3-strikes fail-open + sanity bounds (LSH-02)
 - [x] 05-05-PLAN.md — redisx/shed.go + mirror publish + Subscribe + ReconcileLoop (Pitfall 3 forward-compat Fase 6) + RunTicker with shed-force override (LSH-03, LSH-04)
-- [ ] 05-06-PLAN.md — shed.Middleware + dispatcher precedence (tier-1 unavailable 503 with hardcoded Retry-After:30) + main.go wiring of 4 goroutines (LSH-01..05)
+- [x] 05-06-PLAN.md — shed.Middleware + dispatcher precedence (tier-1 unavailable 503 with hardcoded Retry-After:30) + main.go wiring of 4 goroutines (LSH-01..05)
 - [ ] 05-07-PLAN.md — gatewayctl shed-state + shed-force + thresholds set (JSONB merge) + tenant set-shed-limits (LSH-04, LSH-05)
 - [ ] 05-08-PLAN.md — integration tests: SC-1 burst + SC-2 hysteresis (opt-in slow) + SC-3 hot-reload + SC-4 anti-starvation + 5 edge cases + mirror convergence (LSH-01..05)
 **Research hint:** yes (real saturation thresholds must be tuned from Phase 1 baseline data; histeresis window needs empirical validation)
