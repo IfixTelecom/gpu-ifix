@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -28,6 +29,14 @@ import (
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/redisx"
 )
+
+// ttlNumericPrefixRe extracts the leading numeric portion of a duration
+// string (e.g., "500" from "500ms", "1.5" from "1.5h"). Used to build an
+// accurate "did you mean Ns?" hint when an operator types a sub-second
+// unit suffix by mistake. We accept an optional decimal because Go's
+// time.ParseDuration does. We deliberately match only the first numeric
+// segment — compound durations like "1m30s" don't yield a useful hint.
+var ttlNumericPrefixRe = regexp.MustCompile(`^(\d+(?:\.\d+)?)([a-zµ]+)$`)
 
 // loadAndRedis is the shed-subcommand counterpart of loadAndPool: it
 // resolves config from env and returns a connected redis client. The
@@ -205,9 +214,25 @@ func runShedForce(ctx context.Context, args []string, log *slog.Logger) int {
 			return 2
 		}
 		if ttl > 0 && ttl < time.Second {
-			fmt.Fprintf(os.Stderr,
-				"invalid --ttl %q: must be at least 1 second (got %s — did you mean %ds?)\n",
-				*ttlStr, ttl, int64(ttl/time.Microsecond))
+			// WR-FIX-02: the previous hint used `int64(ttl/time.Microsecond)`
+			// which only produces the correct suggestion when the operator
+			// typed a microsecond suffix. For the COMMON typo "500ms"
+			// (operator meant "500s"), that math returned 500000, yielding
+			// the actively misleading "did you mean 500000s?". Extract the
+			// numeric prefix from the original string instead so "500ms"
+			// becomes "did you mean 500s?". If the input doesn't match the
+			// simple `<number><unit>` shape (e.g., compound "1m500ms"), we
+			// omit the hint rather than emit a wrong one.
+			trimmed := strings.TrimSpace(*ttlStr)
+			if m := ttlNumericPrefixRe.FindStringSubmatch(trimmed); m != nil {
+				fmt.Fprintf(os.Stderr,
+					"invalid --ttl %q: must be at least 1 second (got %s — did you mean %ss?)\n",
+					*ttlStr, ttl, m[1])
+			} else {
+				fmt.Fprintf(os.Stderr,
+					"invalid --ttl %q: must be at least 1 second (got %s)\n",
+					*ttlStr, ttl)
+			}
 			return 2
 		}
 	}
