@@ -118,9 +118,9 @@ Plans:
   4. During shedding, one tenant's burst does not starve other tenants — per-tenant inflight quotas keep smaller apps responsive while overflow from the noisy tenant hits OpenRouter.
 **Plans:** 8 plans
 Plans:
-- [ ] 05-01-PLAN.md — Wave 0 scaffolding: promote expfmt direct + vegeta dep + sentinel errors (shed, dcgm) + 14 obs collectors + auditctx shed helpers + 3 operator gates (LSH-01..05)
-- [ ] 05-02-PLAN.md — DB foundation: migrations 0016/0017/(0018 conditional) + TenantConfig/CircuitConfig struct extensions + sqlc UpdateTenantShedLimits (LSH-02, LSH-04, LSH-05)
-- [ ] 05-03-PLAN.md — shed package core: FSM 4-state (atomic.Int32 + CAS) + LatencyRing + InflightRegistry + Set aggregator + unit tests (LSH-01, LSH-02, LSH-03)
+- [x] 05-01-PLAN.md — Wave 0 scaffolding: promote expfmt direct + vegeta dep + sentinel errors (shed, dcgm) + 14 obs collectors + auditctx shed helpers + 3 operator gates (LSH-01..05)
+- [x] 05-02-PLAN.md — DB foundation: migrations 0016/0017/(0018 conditional) + TenantConfig/CircuitConfig struct extensions + sqlc UpdateTenantShedLimits (LSH-02, LSH-04, LSH-05)
+- [x] 05-03-PLAN.md — shed package core: FSM 4-state (atomic.Int32 + CAS) + LatencyRing + InflightRegistry + Set aggregator + unit tests (LSH-01, LSH-02, LSH-03)
 - [ ] 05-04-PLAN.md — dcgm.Scraper: HTTP poller with expfmt parser + 3-strikes fail-open + sanity bounds (LSH-02)
 - [ ] 05-05-PLAN.md — redisx/shed.go + mirror publish + Subscribe + ReconcileLoop (Pitfall 3 forward-compat Fase 6) + RunTicker with shed-force override (LSH-03, LSH-04)
 - [ ] 05-06-PLAN.md — shed.Middleware + dispatcher precedence (tier-1 unavailable 503 with hardcoded Retry-After:30) + main.go wiring of 4 goroutines (LSH-01..05)
