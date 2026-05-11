@@ -33,6 +33,13 @@ import (
 // refresh cycle, long enough that 3 HGETALL/30s is negligible Redis load.
 const DefaultReconcileInterval = 30 * time.Second
 
+// reconcileErrorBackoffThreshold caps consecutive errors before the
+// loop skips a full cycle (WR-04). With 3 upstreams * 30s, that means
+// at most 3 cycles of N error-lines per failed sweep before the loop
+// short-circuits — keeps the log structured + the counter rate bounded
+// during Redis failover or partition.
+const reconcileErrorBackoffThreshold = 3
+
 // ReconcileLoop blocks until ctx is cancelled, running one
 // reconcileOnce pass per `interval`. Intended to be started as
 // `go set.ReconcileLoop(rootCtx, rdb, 30*time.Second, log)` from
@@ -54,13 +61,37 @@ func (s *Set) ReconcileLoop(ctx context.Context, rdb *redis.Client, interval tim
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	log.Info("shed reconcile loop started", "interval", interval)
+	// consecutiveErrors counts cycles where reconcileOnce reported only
+	// errors (no ok or diverged outcomes). After WR-04 threshold, the
+	// next cycle is skipped silently — log + counter bumps stop being
+	// emitted N times per Redis-down period.
+	var consecutiveErrors int
+	var skipNextCycle bool
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("reconcile loop stopping")
 			return
 		case <-t.C:
-			s.reconcileOnce(ctx, rdb, log)
+			if skipNextCycle {
+				skipNextCycle = false
+				continue
+			}
+			allErrors := s.reconcileOnce(ctx, rdb, log)
+			if allErrors {
+				consecutiveErrors++
+				if consecutiveErrors >= reconcileErrorBackoffThreshold {
+					skipNextCycle = true
+					log.Warn("reconcile sustained errors; skipping next cycle",
+						"consecutive_errors", consecutiveErrors,
+						"threshold", reconcileErrorBackoffThreshold)
+					// Do not reset the counter here — keep skipping
+					// every other cycle while Redis is degraded.
+					consecutiveErrors = 0
+				}
+			} else {
+				consecutiveErrors = 0
+			}
 		}
 	}
 }
@@ -70,14 +101,22 @@ func (s *Set) ReconcileLoop(ctx context.Context, rdb *redis.Client, interval tim
 // divergence. Each comparison emits exactly one
 // gateway_shed_mirror_reconcile_total label increment so the counter
 // rate equals the upstream-count × tick rate when everything is fine.
-func (s *Set) reconcileOnce(ctx context.Context, rdb *redis.Client, log *slog.Logger) {
+//
+// Returns true when EVERY upstream sweep errored (no ok / diverged
+// outcomes). The caller uses this signal to apply the WR-04 backoff
+// (skip the next cycle entirely) so a sustained Redis outage does
+// not flood the structured log with per-upstream error warnings.
+func (s *Set) reconcileOnce(ctx context.Context, rdb *redis.Client, log *slog.Logger) bool {
 	diverged := 0
 	ok := 0
-	for _, name := range s.Names() {
+	errored := 0
+	names := s.Names()
+	for _, name := range names {
 		m, err := redisx.ReadShedState(ctx, rdb, name)
 		if err != nil {
 			obs.GatewayShedMirrorReconcile.WithLabelValues("error").Inc()
 			log.Warn("reconcile: read failed", "upstream", name, "err", err)
+			errored++
 			continue
 		}
 		if m == nil {
@@ -103,4 +142,9 @@ func (s *Set) reconcileOnce(ctx context.Context, rdb *redis.Client, log *slog.Lo
 	if diverged > 0 {
 		log.Info("reconcile completed with divergence", "diverged", diverged, "ok", ok)
 	}
+	// allErrors signals the caller's circuit-breaker: only return true
+	// when at least one upstream was attempted AND every attempt failed.
+	// An empty Names() set returns false so the caller does not skip
+	// cycles based on a no-op sweep.
+	return errored > 0 && errored == len(names)
 }
