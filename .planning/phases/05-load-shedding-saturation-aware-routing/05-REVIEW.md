@@ -1,295 +1,371 @@
 ---
 phase: 05-load-shedding-saturation-aware-routing
-reviewed: 2026-05-11T20:00:00Z
+reviewed: 2026-05-11T22:00:00Z
 depth: standard
-files_reviewed: 53
+files_reviewed: 20
 files_reviewed_list:
   - gateway/cmd/gateway/main.go
-  - gateway/cmd/gatewayctl/main.go
   - gateway/cmd/gatewayctl/shed.go
-  - gateway/cmd/gatewayctl/shed_test.go
-  - gateway/cmd/gatewayctl/tenant.go
-  - gateway/cmd/gatewayctl/tenants_shed.go
-  - gateway/cmd/gatewayctl/tenants_shed_test.go
-  - gateway/cmd/gatewayctl/thresholds.go
-  - gateway/cmd/gatewayctl/thresholds_test.go
-  - gateway/db/migrations/0016_evolve_tenants_shedding_limits.sql
-  - gateway/db/migrations/0017_evolve_upstreams_shed_thresholds.sql
-  - gateway/db/migrations/0018_audit_log_shed_values.sql
-  - gateway/db/queries/tenants_admin.sql
   - gateway/internal/auditctx/override.go
-  - gateway/internal/config/config.go
-  - gateway/internal/db/gen/models.go
-  - gateway/internal/db/gen/querier.go
-  - gateway/internal/db/gen/tenants_admin.sql.go
-  - gateway/internal/dcgm/errors.go
   - gateway/internal/dcgm/scraper.go
-  - gateway/internal/dcgm/scraper_test.go
-  - gateway/internal/integration_test/helpers_shed_test.go
-  - gateway/internal/integration_test/shed_edge_cases_test.go
-  - gateway/internal/integration_test/shed_mirror_convergence_test.go
-  - gateway/internal/integration_test/shed_sc1_burst_test.go
-  - gateway/internal/integration_test/shed_sc2_hysteresis_test.go
-  - gateway/internal/integration_test/shed_sc3_hotreload_test.go
-  - gateway/internal/integration_test/shed_sc4_antistarvation_test.go
   - gateway/internal/obs/metrics.go
   - gateway/internal/proxy/dispatcher.go
   - gateway/internal/redisx/shed.go
-  - gateway/internal/redisx/shed_test.go
-  - gateway/internal/shed/errors.go
   - gateway/internal/shed/fsm.go
-  - gateway/internal/shed/fsm_test.go
   - gateway/internal/shed/inflight.go
-  - gateway/internal/shed/inflight_test.go
   - gateway/internal/shed/latency.go
-  - gateway/internal/shed/latency_test.go
   - gateway/internal/shed/middleware.go
-  - gateway/internal/shed/middleware_test.go
   - gateway/internal/shed/mirror.go
   - gateway/internal/shed/reconcile.go
-  - gateway/internal/shed/reconcile_test.go
   - gateway/internal/shed/set.go
-  - gateway/internal/shed/set_test.go
   - gateway/internal/shed/subscribe.go
-  - gateway/internal/shed/subscribe_test.go
   - gateway/internal/shed/tick.go
-  - gateway/internal/shed/tick_test.go
-  - gateway/internal/shed/tools_phase5.go
   - gateway/internal/tenants/config.go
   - gateway/internal/tenants/loader.go
+  - gateway/internal/upstreams/loader.go
   - gateway/internal/upstreams/types.go
 findings:
-  critical: 2
-  warning: 6
-  info: 5
-  total: 13
+  critical: 0
+  warning: 2
+  info: 4
+  total: 6
 status: issues_found
+prior_review: 05-REVIEW.iter2.md
+prior_findings_resolved:
+  blockers: 2  # CR-01, CR-02
+  warnings: 6  # WR-01..WR-06
 ---
 
-# Phase 5: Code Review Report
+# Phase 5: Code Review Report — Iteration 3 (Fix-Pass Validation)
 
-**Reviewed:** 2026-05-11T20:00:00Z
+**Reviewed:** 2026-05-11T22:00:00Z
 **Depth:** standard
-**Files Reviewed:** 53
-**Status:** issues_found
+**Files Reviewed:** 20
+**Status:** issues_found (no BLOCKERs — only follow-up gaps from the fix patches)
 
 ## Summary
 
-Revisão adversarial do subsystem de Load Shedding (Phase 5) — composite FSM, DCGM scraper, Redis mirror, middleware HTTP e subcomandos `gatewayctl`. A implementação demonstra cuidado real com fail-open semantics, locklessness no hot-path (atomic.Int64/Int32) e mirror não-bloqueante. Cobertura de testes unitários é boa, com testes de race-benign explícitos para o latency ring e tabela de transições do FSM totalmente exercitada.
+Validação adversarial do fix-pass aplicado entre 3ea48b7 e 23d97ad sobre o
+relatório anterior (`05-REVIEW.iter2.md`). Os 2 BLOCKERs (CR-01, CR-02) e os 6
+WARNINGs (WR-01..WR-06) foram **inspecionados in-loco** no código atual.
 
-Achados notáveis:
+**Veredito por finding anterior:**
 
-- **BLOCKER (CR-01):** Branch 09 do `shed.Middleware` (normal-tenant capped → tier-1) NÃO propaga `shed_decision` / `upstream_override` para o audit middleware. O padrão de mutação in-place de `*r` usado em Branches 10a/10b foi esquecido aqui. Audit log perde a categorização de ~95% do tráfego desviado por shed em produção.
-- **BLOCKER (CR-02):** `gateway_shed_force_active` permanece em 1 indefinidamente quando o valor de `gw:shed:force:{upstream}` é malformado, mesmo após a chave expirar / ser deletada — viola contrato dashboard.
-- **WARNING (WR-01..06):** TTL-precision (microsecond→second truncation no `gatewayctl shed-state`), filtragem frágil em `AllShedStateKeys`, vazamento de goroutine em `MakePublishTransition`, exception-handling no `reconcileOnce`, fallthrough silencioso em `Inc` de upstream desconhecido, validação de TTL ceiling vs. unsigned overflow.
+| Finding | Status | Commit | Evidência no código atual |
+|---------|--------|--------|---------------------------|
+| CR-01 (middleware Branch 09 audit) | RESOLVED | 3ea48b7 | `middleware.go:248` — `*r = *r.WithContext(ctx)` antes do `next.ServeHTTP(w, r)`. Padrão idêntico aos Branches 10a (linha 203) e 10b (linha 223). |
+| CR-02 (force gauge stuck em 1) | RESOLVED | ed9fc10 | `tick.go:152` — `obs.GatewayShedForceActive.WithLabelValues(upstream).Set(0)` no branch `default` do switch antes do `return`. |
+| WR-01 (TTL_S truncated) | RESOLVED | 311393e | `shed.go:127` — `int64((forceTTL + time.Second/2) / time.Second)` arredondamento. |
+| WR-02 (`force:*` collision) | RESOLVED | 8cf3d02 | `upstreams/loader.go:82-87` — `strings.HasPrefix(r.Name, "force:")` skip com log warn `status=reserved_name`. |
+| WR-03 (goroutine-per-transition) | RESOLVED | fa630c4 | `mirror.go:74-98` — worker pool 2x64; `select default → GatewayShedMirrorDropped.Inc()`. Métrica nova `gateway_shed_mirror_dropped_total` declarada em `obs/metrics.go:306-309`. |
+| WR-04 (reconcile no backoff) | RESOLVED | 5c50ccb | `reconcile.go:50-97` — `reconcileErrorBackoffThreshold=3`, `skipNextCycle` flag. `reconcileOnce` retorna `bool` (`allErrors`). |
+| WR-05 (silent Inc/Dec no-op) | RESOLVED | d983493 | `inflight.go:88,143` — emite `GatewayShedInflightUnknownUpstream{op=inc\|dec}`; `inflight.go:208-221` — `AddUpstream`; `main.go:464` — hot-reload listener chama `shedInflight.AddUpstream(n)`. |
+| WR-06 (sub-second TTL) | RESOLVED | 23d97ad | `shed.go:207-212` — `if ttl > 0 && ttl < time.Second { exit 2 }` antes de abrir Redis. |
 
-Os requisitos de fail-open semantics (DCGM URL vazio, nil VramReader), TTL bounds (≤1h), JSONB merge não-destrutivo e migration 0018 docs-only foram **TODOS verificados como corretos**. Race-detector-safe atomic ops no FSM e LatencyRing também checados.
+**Build & test status (validado neste reviewer):**
+
+```
+go build ./...                            # exit 0
+go vet ./internal/shed/... ./internal/redisx/...
+                                          # exit 0 (sem warnings)
+go test -short ./internal/shed/...        # ok 0.512s
+go test -short ./internal/redisx/...      # ok 2.117s
+go test -short ./internal/upstreams/...   # ok 0.073s
+go test -short ./internal/dcgm/...        # ok 0.167s
+go test -short ./cmd/gatewayctl/...       # ok 5.253s
+```
+
+**Regressões introduzidas pelo fix-pass — 2 WARNINGs + 4 Info:**
+
+Nenhuma das regressões é blocker — não há corruption de dados, vazamento de
+segurança, ou crash. São defeitos de qualidade/observabilidade que valem
+follow-up no próximo phase ou em um Plan 05-09 de hardening:
+
+- **WR-FIX-01**: `MakePublishTransition` deixa workers órfãos em todos os
+  test setups que reusam o helper (sem hook de Stop). Acumula goroutines em
+  test suite long-running. Comentário em `subscribe_test.go:141` ficou stale
+  ("synchronous but defensive" — não é mais sync).
+- **WR-FIX-02**: Mensagem de erro do WR-06 fix usa hint matematicamente
+  incorreto para typos `ms`/`ns`. Para `--ttl 500ms`, a mensagem sugere
+  "did you mean 500000s?" — desorientador.
+- **IN-FIX-01..04**: documentação desatualizada (`Inc no-op` agora bumpa
+  métrica; comentário do `reconcile.go:88-90` discrepante com loop real);
+  faltam testes unitários para `AddUpstream` e para o backoff de 3 erros
+  consecutivos no reconcile.
 
 ## Critical Issues
 
-### CR-01: shed middleware Branch 09 não propaga audit context para tier-1 desvios
-
-**File:** `gateway/internal/shed/middleware.go:234-242`
-**Issue:** O Branch 09 (normal tenant + FSM=ON + cap excedido + tier-1 disponível) só passa o context derivado via `next.ServeHTTP(w, r.WithContext(ctx))`. A audit middleware (montada **fora** do shed na cadeia chi) lê `r.Context()` **após** `next.ServeHTTP` retornar, usando o `r0` original que ela mesma capturou — não o `r.WithContext(ctx)` que foi passado adiante. Resultado: a linha em `ai_gateway.audit_log` para tráfego desviado a tier-1 por shed **não** terá `upstream="openrouter-chat"` nem `shed_decision="shed_saturated"` populados pelo override; a audit middleware vai usar o valor route-derived (e.g. "llm") como upstream.
-
-Padrão exato consciente desse problema já está em uso em:
-- `gateway/internal/proxy/dispatcher.go:317` (`writeSensitiveBlock`): `*r = *r.WithContext(auditctx.WithUpstreamOverride(...))`
-- `gateway/internal/shed/middleware.go:203` (Branch 10a sensitive): `*r = *r.WithContext(ctx)`
-- `gateway/internal/shed/middleware.go:223` (Branch 10b no-tier-1): `*r = *r.WithContext(ctx)`
-
-Apenas Branch 09 ficou com o padrão clássico Go que não propaga upstream-da-cadeia. O teste `TestMiddleware_Branch09_FSMOn_NormalCapped` passa porque verifica o context dentro do handler interno (`req.Context()`), mas isso não prova que o `r0` da audit middleware enxerga o mesmo override.
-
-Impacto: dashboards e queries de billing por upstream perderão visibilidade do volume de tráfego que foi desviado a tier-1 por saturação — exatamente o caso de uso primário do Phase 5.
-
-**Fix:**
-```go
-// Branch 09 (normal tenant over cap, tier-1 available) — adicionar
-// mutação in-place ANTES do next.ServeHTTP, como Branches 10a/10b já fazem:
-ctx := auditctx.WithShedDecision(r.Context(), auditctx.UpstreamShedSaturatedValue)
-ctx = auditctx.WithUpstreamOverride(ctx, t1.Name)
-obs.GatewayShedDecisions.WithLabelValues(t0.Name, "tenant_cap").Inc()
-obs.GatewayInflightTier1.WithLabelValues(t1.Name).Inc()
-defer obs.GatewayInflightTier1.WithLabelValues(t1.Name).Dec()
-log.Debug("shed routed to tier-1", ...)
-
-*r = *r.WithContext(ctx) // ← ADICIONAR esta linha
-next.ServeHTTP(w, r)     // ← passar r mutado (não r.WithContext(...))
-```
-
-Também adicionar um teste integrado (ou unit usando uma audit-fake) que invoque o middleware shed dentro de uma cadeia simulada e leia `auditctx.ShedDecisionFromContext(r.Context())` no ponto onde a audit middleware leria — após `next.ServeHTTP` retornar.
-
-### CR-02: GatewayShedForceActive nunca volta a 0 quando o valor de force é malformado
-
-**File:** `gateway/internal/shed/tick.go:131-153`
-**Issue:** Quando `redisx.GetShedForce` retorna `ok=true` mas o valor armazenado é desconhecido (qualquer coisa que não seja `"off"` ou `"on"`), o código:
-
-1. Faz `obs.GatewayShedForceActive.WithLabelValues(upstream).Set(1)` (linha 132)
-2. Cai no `default:` do switch (linha 139)
-3. Faz log Warn e `return` (linha 146)
-
-O `return` pula o `obs.GatewayShedForceActive...Set(0)` da linha 153, que só roda na "ramo else" (chave ausente). Resultado: uma vez que o valor é malformado, o gauge fica em 1 **para sempre** (até alguém escrever um valor válido `off`/`on`). Mesmo quando a chave expirar, o gauge não é restaurado a 0 — o tick subsequente vai pegar `ok=false` e tentar Set(0), mas... espera, esse caminho funciona, **se** a chave expirar antes que outro tick com valor malformado rode.
-
-Cenário concreto: operador escreve `gw:shed:force:local-llm = "armed"` (digitação errada, não-aceitada pelo `gatewayctl shed-force` mas permitida via `redis-cli SET`). TTL longo (60 minutos). Por 60 minutos, dashboard mostra `gateway_shed_force_active{upstream="local-llm"}=1`, FSM continua avaliando sinais normalmente — discordância visível.
-
-Mais grave: o `log.Warn` em loop a cada 100ms (em teste) ou 1s (em prod) inunda o log estruturado com a mesma mensagem até a chave expirar — pode ofuscar outros warnings reais.
-
-**Fix:**
-```go
-default:
-    obs.GatewayShedForceActive.WithLabelValues(upstream).Set(0) // ← ADICIONAR
-    log.Warn("malformed shed-force value; ignoring", "upstream", upstream, "value", state)
-    return
-```
-
-Adicionalmente: considerar usar um log de-duplication (e.g. log apenas no primeiro tick onde o valor mudou, não a cada tick). Padrão fácil: stash do último valor visto em um sync.Map por upstream.
+Nenhum. Os 2 BLOCKERs anteriores (CR-01, CR-02) estão resolvidos e nenhum
+novo defeito de severidade Critical foi introduzido pelos patches.
 
 ## Warnings
 
-### WR-01: `gatewayctl shed-state` trunca TTL para 0 quando override tem <1s restante
+### WR-FIX-01: Worker pool em `MakePublishTransition` vaza goroutines em testes e não tem Stop hook
 
-**File:** `gateway/cmd/gatewayctl/shed.go:121`
-**Issue:** A coluna `TTL_S` em formato table/JSON é calculada como `int64(forceTTL / time.Second)`. Quando o TTL restante é, por exemplo, 350ms (override prestes a expirar), a divisão truncate-para-zero da integer math gera `TTL_S=0`. Operadores que rodam `shed-state` em loop verão "TTL_S=0 mas FORCE ainda ativo" — confuso e parece bug.
+**File:** `gateway/internal/shed/mirror.go:74-98`
+**Issue:** O fix do WR-03 substitui `go pubTransition(...)` por um worker pool
+fixo de 2 goroutines + buffered channel de 64. Cada chamada a
+`MakePublishTransition(rdb)` (com rdb != nil) spawnar 2 goroutines NOVAS.
+Problemas:
 
-**Fix:** arredondar ou usar `time.Duration.Seconds()` (float) com formatação:
-```go
-r.ForceTTLSeconds = int64((forceTTL + time.Second/2) / time.Second) // arredondar
-// ou aceitar uma resolução mais fina:
-// r.ForceTTLMillis = forceTTL.Milliseconds()
-```
+1. **Leak em testes:** `subscribe_test.go:139` (`TestPublishTransitionWritesAndPublishes`)
+   e `shed_mirror_convergence_test.go:69` chamam `MakePublishTransition`
+   uma vez por teste. Em uma `go test ./...` rodando ambos, a binária de
+   teste acumula 4 workers órfãos (2 por chamada) que bloqueiam em
+   `for j := range jobs` até o processo morrer. Inofensivo per-test mas
+   amplifica em test suite long-running com `-count=N`.
 
-### WR-02: `AllShedStateKeys` falsamente filtra upstream chamado `force:*`
+2. **Sem graceful shutdown:** main.go invoca `MakePublishTransition` em
+   `cmd/gateway/main.go:361` e nunca pode parar os workers — quando o
+   gateway recebe SIGTERM, o `ctx.Done()` para o ticker e os listeners,
+   mas os 2 workers continuam bloqueados em `range jobs` (canal nunca
+   fechado). O 2s `redisOpTimeout` do `doPublishTransition` limita o
+   pior caso, mas se um job estiver em-flight quando SIGTERM chegar, o
+   container fica em "Terminating" por até 2s extras antes do kernel
+   SIGKILL. Em Kubernetes com graceful shutdown longo, é uma penalidade
+   de 2s sem ganho funcional.
 
-**File:** `gateway/internal/redisx/shed.go:233`
-**Issue:** A filtragem usa `strings.HasPrefix(k, "gw:shed:force:")`. Se algum dia alguém criar um upstream chamado `force:something` (improvável mas não validado), a state key será `gw:shed:force:something` e será incorretamente filtrada (interpretada como force key).
+3. **Comentário stale:** `subscribe_test.go:141-142` diz "Allow any
+   goroutine-internal dispatch (impl is synchronous but defensive)" — a
+   impl NÃO é mais síncrona (é async via worker pool). O `time.Sleep(30ms)`
+   defensivo agora é load-bearing, não puramente defensive. Comentário
+   precisa ser atualizado para refletir o novo contrato.
 
-Em produção isso é defesa em profundidade — o `upstream.Name` é controlado por migration + CLI, ambos validam nomes. Mas o filtro está acoplado à convenção de nomenclatura, sem assertion.
-
-**Fix:** validar que `upstream.Name` não pode começar com `force:` no `gatewayctl upstreams create` / migration insert. Alternativamente, mudar o prefixo de force keys para algo que não pode colidir (e.g. `gw:shedforce:`).
-
-### WR-03: `MakePublishTransition` lança goroutine fire-and-forget sem bound
-
-**File:** `gateway/internal/shed/mirror.go:42-63` + `gateway/cmd/gateway/main.go:385`
-**Issue:** Em `main.go:385`, `pubTransition` é invocado como `go pubTransition(...)`. Se houver tempestade de transições (FSM oscillating + thresholds mal-configurados levando a flapping), o gateway pode lançar centenas de goroutines simultâneas todas tentando HSET+PUBLISH com 2s de timeout cada. Sem worker pool ou semáforo.
-
-Em condições normais (FSM transita 1-2 vezes por dia por upstream), isso é seguro. Em incident-mode (operator override flapping toggle, ou bug que faz CAS falhar repetidamente — embora `transition()` filter same-state previne isso) goroutines podem se acumular.
-
-Risco baixo dado o teto natural de transições (FSM tem hysteresis), mas vale documentar ou adicionar um semáforo com 10 slots.
-
-**Fix:** introduzir um buffered channel de transições + 1-2 worker goroutines:
-```go
-type transitionJob struct{ upstream string; to State; reason string; sig *redisx.ShedEventSignals }
-jobs := make(chan transitionJob, 64)
-for i := 0; i < 2; i++ {
-    go func() {
-        for j := range jobs {
-            pubTransition(j.upstream, j.to, j.reason, j.sig)
-        }
-    }()
-}
-// No OnChange: jobs <- transitionJob{...} (com select+default para não bloquear).
-```
-
-### WR-04: `reconcileOnce` continua o sweep mesmo após erros transitórios, mas não tem backoff
-
-**File:** `gateway/internal/shed/reconcile.go:78-85`
-**Issue:** Se Redis estiver degradado (e.g. failover replica eleição), cada chamada `ReadShedState` falha com timeout. O loop emite `Warn` por upstream + incrementa o contador `gateway_shed_mirror_reconcile_total{result="error"}` — N warnings + N contador-bumps a cada 30s, para todos os upstreams. Sem circuit-breaker no reconcile.
-
-Não é crítico (sweep continua, próximo ciclo tenta de novo), mas em incidents Redis o log fica spammed.
-
-**Fix:** adicionar contador local `consecutiveErrors` que, ao chegar em N (e.g. 3), pula o próximo ciclo inteiro. Resetar ao primeiro sucesso.
-
-### WR-05: `InflightRegistry.Inc` retorna silenciosamente para upstream desconhecido
-
-**File:** `gateway/internal/shed/inflight.go:65-68`
-**Issue:** O comentário diz "Inc on an unknown upstream is a silent no-op". Mas se isso acontecer em produção significa que **a middleware está tentando trackear um upstream que o Registry não conhece** — bug grave de wiring (hot-reload deletou o upstream entre Resolve e Inc).
-
-Combinado com `Dec` silently no-op para o mesmo cenário, o caller acredita estar tracking inflight mas o counter global nunca sobe; FSM nunca dispara via signal Inflight. Failure invisível.
-
-Mais grave: hot-reload do `upstreams.Loader` rebuilda o `breakerSet` e `shedSet` (em main.go:447-453), mas o `shedInflight` é construído **uma vez** em `main.go:337` e NUNCA rebuildado. Se um upstream novo for adicionado via `gatewayctl upstreams create`, o middleware vai resolver tier-0 para ele, chamar `Inc(novo-name, tenant)` no shedInflight, e silently no-op — sem inflight tracking, sem FSM signal, shedding não funcionará para o upstream novo até o restart do gateway.
+**Risco em produção:** baixo (worker leak não cresce; é fixo em 2 por
+processo gateway). Em testes: cresce O(N) com N testes que chamam
+`MakePublishTransition`. Em CI long-running com `-count=100` ou `go test
+-race`, pode aumentar memória de teste sem comprometer correctness.
 
 **Fix:**
-1. Em `main.go` hot-reload, chamar `shedInflight.Rebuild(loader.Names())` também (precisa adicionar método Rebuild ao InflightRegistry, ou pelo menos AddUpstream).
-2. Em `Inc` / `Dec` para upstream unknown, emitir métrica `gateway_shed_inflight_unknown_upstream_total{upstream}` ao invés de no-op silencioso. Operador detecta wiring bug rapidamente.
-3. Documentar este caminho explicitamente no comentário com aviso de severidade.
 
-### WR-06: TTL parsing aceita valores que poderiam ser interpretados como microseconds
-
-**File:** `gateway/cmd/gatewayctl/shed.go:190`
-**Issue:** `time.ParseDuration("300s")` aceita também `"300us"` (microseconds), `"300ns"`, etc. `gatewayctl shed-force on --upstream X --ttl 300us` seria parseado para 300 microseconds, depois rejeitado pelo `redisx.WriteShedForce` por `ttl <= 0` falso mas baixo. Não bug funcional (rejeitado), mas mensagem de erro `redisx: shed-force TTL 300µs out of range` pode ser confusa — operador esperava 300 seconds.
-
-**Fix:** ou rejeitar unidades sub-second no CLI (`ttl < 1*time.Second` → exit 2 com mensagem clara), ou aceitar o valor inteiro como segundos por convenção:
+Opção 1 (mínima) — atualizar comentários stale:
 ```go
-// Aceitar "300" como segundos:
-if v, err := strconv.Atoi(*ttlStr); err == nil {
-    ttl = time.Duration(v) * time.Second
-} else {
-    ttl, err = time.ParseDuration(*ttlStr)
-    ...
+// subscribe_test.go:140-141
+pub := MakePublishTransition(c)
+pub("local-llm", StateOn, ...)
+// Worker pool is asynchronous; allow up to 50ms for the bounded
+// channel dispatch + Redis HSET to complete before reading state.
+time.Sleep(50 * time.Millisecond)
+```
+
+Opção 2 (com hook de Stop) — retornar a struct ao invés do closure:
+```go
+type Publisher struct {
+    rdb  *redis.Client
+    jobs chan publishJob
+    done chan struct{}
+}
+
+func (p *Publisher) Publish(upstream string, to State, reason string, sig *redisx.ShedEventSignals) {...}
+func (p *Publisher) Stop() {
+    close(p.jobs)  // workers drain remaining jobs and exit
+    <-p.done       // wait for all workers
+}
+```
+
+main.go: `defer pub.Stop()` antes do `<-ctx.Done()`. Tests: `t.Cleanup(pub.Stop)`.
+
+Opção 3 (drop-in) — keep o closure API, mas armazenar `jobs` em um
+package-level singleton com `Once`. Único processo, único pool. Tests
+que precisam de isolamento podem usar uma factory alternativa que
+fecha o pool em `t.Cleanup`.
+
+### WR-FIX-02: Hint de erro do WR-06 sugere valor matematicamente errado para typos `ms`/`ns`
+
+**File:** `gateway/cmd/gatewayctl/shed.go:207-212`
+**Issue:** O fix do WR-06 emite:
+```go
+fmt.Fprintf(os.Stderr,
+    "invalid --ttl %q: must be at least 1 second (got %s — did you mean %ds?)\n",
+    *ttlStr, ttl, int64(ttl/time.Microsecond))
+```
+
+O hint `did you mean %ds?` usa `int64(ttl/time.Microsecond)`. Isso só está
+correto para input em microsegundos:
+
+| Input | ttl | `ttl/time.Microsecond` | Hint exibido | Correto? |
+|-------|-----|------------------------|--------------|----------|
+| `--ttl 300us` | 300µs | 300 | "did you mean 300s?" | sim |
+| `--ttl 5ms` | 5ms | 5000 | "did you mean 5000s?" | **não** — usuário queria 5s |
+| `--ttl 300ns` | 300ns | 0 | "did you mean 0s?" | **não** — sem hint útil |
+| `--ttl 500ms` | 500ms | 500000 | "did you mean 500000s?" | **não** — usuário queria 0.5s (inválido) ou 500s |
+
+O hint é actively misleading para o caso comum de typo `ms` ao invés de `s`
+(operadores acostumados a setar timeouts em ms podem confundir).
+
+**Impacto:** operador segue o hint cegamente e configura um TTL absurdo
+(500000s = ~6 dias). `WriteShedForce` rejeita por `ttl > 1h`, então o
+override não é aplicado — mas isso resulta em dois ciclos de tentativa e
+erro ao invés de um.
+
+**Fix:** ou (a) parar de emitir hint quando o valor não é microseconds; ou
+(b) extrair o valor numérico do string original e sugerir `{num}s`:
+
+```go
+if ttl > 0 && ttl < time.Second {
+    // Try to extract the numeric prefix to suggest the user-intended
+    // value-in-seconds variant. Handles "500ms" → "500s", not 500000s.
+    re := regexp.MustCompile(`^(\d+)([a-zµ]+)$`)
+    if m := re.FindStringSubmatch(strings.TrimSpace(*ttlStr)); m != nil {
+        fmt.Fprintf(os.Stderr,
+            "invalid --ttl %q: must be at least 1 second (got %s — did you mean %ss?)\n",
+            *ttlStr, ttl, m[1])
+    } else {
+        fmt.Fprintf(os.Stderr,
+            "invalid --ttl %q: must be at least 1 second (got %s)\n",
+            *ttlStr, ttl)
+    }
+    return 2
 }
 ```
 
 ## Info
 
-### IN-01: Conversão `uint32(time.Since(start).Milliseconds())` pode overflow
+### IN-FIX-01: Comentário do `reconcile.go:88-90` discrepa do código real
 
-**File:** `gateway/internal/shed/middleware.go:257`
-**Issue:** `elapsed := uint32(time.Since(start).Milliseconds())`. Se a request demorar mais de ~49.7 dias (2^32 ms), o uint32 vai overflow. Em produção isso jamais acontece (timeout do upstream é 60s), mas se a `defer` rodar em uma request que ficou "presa" infinitamente (e.g. WS upgrade que nunca close), o valor torna-se lixo.
-
-**Fix:** clamp explícito:
+**File:** `gateway/internal/shed/reconcile.go:88-90`
+**Issue:** O comentário diz:
 ```go
-ms := time.Since(start).Milliseconds()
-if ms > int64(math.MaxUint32) {
-    ms = int64(math.MaxUint32)
-}
-ring.Record(uint32(ms))
+// Do not reset the counter here — keep skipping
+// every other cycle while Redis is degraded.
+consecutiveErrors = 0
 ```
 
-### IN-02: Tabwriter Flush pode swallow error silenciosamente
+Mas o código IMEDIATAMENTE faz `consecutiveErrors = 0` na linha seguinte.
+Isso significa que o backoff NÃO é "keep skipping every other cycle"; é
+"after 3 errors skip 1, then run 3 more, skip 1, repeat" (rate-limit de
+log de ~25% de redução durante outage, não 50%).
 
-**File:** `gateway/cmd/gatewayctl/shed.go:145-148`
-**Issue:** `tw.Flush()` retorna erro só se o underlying `os.Stdout` falhar (pipe quebrado, disco cheio). O erro é checkado e fmt.Fprintf'ado pra stderr — bom. Mas note que se Stdout fechar mid-print, alguns rows já foram impressos parcialmente. Comportamento aceitável para uma CLI.
+Não é bug — o spirit do WR-04 (rate-limit log spam) ainda é atendido — mas
+a documentação confunde quem precisa raciocinar sobre o comportamento em
+incident.
 
-**Fix:** nenhum — apenas observação. Talvez documentar que o flush parcial é possível.
+**Fix:** corrigir o comentário para refletir o padrão real:
+```go
+// Reset the counter after triggering the skip so the loop emits N more
+// log lines + counter bumps before the next skip — gives ~25% log
+// rate reduction during sustained Redis outage. To extend the silence
+// further (e.g., skip every other cycle), keep the counter at
+// threshold and skip on each subsequent tick.
+consecutiveErrors = 0
+```
 
-### IN-03: Constante `dcgmMetricName` deveria ser configurável
+### IN-FIX-02: Sem teste unitário para `InflightRegistry.AddUpstream`
 
-**File:** `gateway/internal/dcgm/scraper.go:70`
-**Issue:** `DCGM_FI_DEV_FB_USED` está hardcoded. Se NVIDIA renomear ou descontinuar a métrica (improvável mas histórico), o scraper precisa de um rebuild. Considerar tornar configurável via env var `DCGM_METRIC_NAME` com default atual.
+**File:** `gateway/internal/shed/inflight_test.go`
+**Issue:** O fix do WR-05 adiciona o método `AddUpstream` (linhas 208-221
+em inflight.go). Não há teste cobrindo:
 
-**Fix:** opcional — risco real baixo. Documentar como semi-protocol-version.
+- AddUpstream em registry vazio (caso boot)
+- AddUpstream idempotente (chamado 2x com mesmo nome)
+- AddUpstream em receiver nil (defesa)
+- AddUpstream com nome vazio (defesa)
+- Inc após AddUpstream funciona (não bumpa `GatewayShedInflightUnknownUpstream`)
 
-### IN-04: Mensagem de "armed" na operator override CLI
+`TestInflightRegistry_UnknownUpstreamIncNoop` (linha 85-94) também tem
+comentário stale: a função agora NÃO é "silent no-op" — ela bumpa o
+contador `GatewayShedInflightUnknownUpstream{upstream,op=inc}`. O teste
+não verifica isso.
 
-**File:** `gateway/cmd/gatewayctl/shed.go:168`
-**Issue:** `runShedForce` aceita só `on|off|clear`. Não há como o operador forçar `armed` ou `recovering`. Comentário do plan diz "operator override força estado para `on` ou `off`" — alinhado. Mas o tick.go's switch também aceita só "off"/"on" (cai no default para "armed"/"recovering"), então tudo consistente. Apenas verificar que docs/runbook não prometem outros valores.
+**Fix:** adicionar suite:
+```go
+func TestInflightRegistry_AddUpstream_IdempotentAndIncrementable(t *testing.T) {
+    r := NewInflightRegistry([]string{"local-llm"})
+    r.AddUpstream("new-llm")
+    r.AddUpstream("new-llm") // idempotent
+    r.AddUpstream("")         // no-op
+    tenant := uuid.New()
+    r.Inc("new-llm", tenant)
+    if g := r.GlobalInflight("new-llm"); g != 1 {
+        t.Fatalf("AddUpstream + Inc should land at 1, got %d", g)
+    }
+}
+```
 
-**Fix:** nenhum no código — verificar `.planning/phases/05-load-shedding-saturation-aware-routing/*-PLAN.md` se há menção a "armed" override.
+### IN-FIX-03: Sem teste para o backoff de 3 erros consecutivos no reconcile
 
-### IN-05: `defaultClassifyRoute` usa HasPrefix para `/v1/chat/completions`
+**File:** `gateway/internal/shed/reconcile_test.go`
+**Issue:** Fix do WR-04 adiciona `reconcileErrorBackoffThreshold=3`, mas
+`reconcile_test.go` não tem teste verificando:
 
-**File:** `gateway/internal/shed/middleware.go:82-90`
-**Issue:** `strings.HasPrefix(path, "/v1/chat/completions")` retorna true para `/v1/chat/completions-suffix-attack`. Não há tal endpoint hoje, mas se chi adicionar rotas wildcards `/v1/chat/completions/*` no futuro, o role seria classificado como "llm" para qualquer subpath. Pequeno risco surface.
+- Que após 3 ciclos full-error consecutive, o próximo ciclo é skipped (no
+  log warn "sustained errors")
+- Que um único ciclo bem-sucedido reseta o contador
+- Que `reconcileOnce` retorna `true` quando TODOS os upstreams falham
+- Que `reconcileOnce` retorna `false` quando pelo menos um upstream
+  sucede (mesmo que outros falhem)
 
-**Fix:** usar igualdade exata ou `strings.HasPrefix(path, "/v1/chat/completions/")` + `path == "/v1/chat/completions"`.
+O cenário-modelo (Redis com falha simulada via miniredis Close + reabrir)
+é não-trivial mas testável.
+
+**Fix:** adicionar `TestReconcileLoop_BackoffAfter3Errors` usando
+miniredis.Close() para forçar erro, contar `GatewayShedMirrorReconcile{result=error}`
+samples antes e depois do 4º tick.
+
+### IN-FIX-04: Constantes `mirrorPublishWorkers` e `mirrorPublishQueueDepth` não calibradas empiricamente
+
+**File:** `gateway/internal/shed/mirror.go:51,57`
+**Issue:** O fix do WR-03 hardcoded:
+- `mirrorPublishWorkers = 2`
+- `mirrorPublishQueueDepth = 64`
+
+Os comentários justificam ("2 is enough for 1-2/day per upstream"), mas
+não há instrumentação que confirme isso em produção. Se o flapping
+incident (cenário pior caso) ultrapassar 64 transições pending, as
+seguintes drop silently com bump em `gateway_shed_mirror_dropped_total`.
+O reconcile loop fecha o gap, mas há janela de divergência entre
+dashboard e estado real.
+
+Não é bug funcional — é uma escolha de constante que vale ser revisitada
+após primeiro incident real.
+
+**Fix:** tornar configurável via env vars `SHED_MIRROR_PUBLISH_WORKERS` e
+`SHED_MIRROR_PUBLISH_QUEUE_DEPTH`, ambos com defaults atuais. Permitiria
+turn-up rápido em incident sem deploy.
 
 ---
 
 ## Verificações que passaram (positive findings)
 
-Os seguintes pontos de risco identificados no `<focus_areas>` da revisão foram **verificados como corretos** — vale registrar para histórico:
+Os pontos de risco identificados no `<focus_areas>` desta revisão foram
+**verificados como corretos** — vale registrar para histórico:
 
-- **Concurrency FSM lockless**: `state` e `enteredAt` são `atomic.Int32` / `atomic.Int64` com `CompareAndSwap` em transições. Não há paths que leem o int32 inteiro sem usar `Load()`. Mesmo race-com-tick não causa torn writes; a CAS filter previne double-callback.
-- **Fail-open DCGM URL vazio**: main.go:345 explicitamente NÃO chama `dcgm.New` quando `DCGMExporterURL == ""`. `dcgmScraper` fica nil; `ReadMiB` em nil receiver retorna `(0, true)` corretamente. Sem boot panic.
-- **TTL bounds shed-force**: `redisx.WriteShedForce` rejeita `ttl > 1h` (3600s). Tests `TestWriteShedForce_TTLCeiling` e `TestWriteShedForce_TTLZero` cobrem ambos extremos.
-- **JSONB merge `thresholds set`**: `runThresholdsSet` lê `circuit_config` existente, unmarshal para map, overlay shed_* keys, marshal back. Campos pre-existentes (`failures`, `cooldown_s`) preservados.
-- **Migration 0016 não-destrutiva**: `ADD COLUMN IF NOT EXISTS` com `NOT NULL DEFAULT`. Nenhum UPDATE de dados existentes. Down migration restaura trigger Phase 4.
-- **Migration 0017 JSONB merge non-clobber**: usa `COALESCE(circuit_config, '{}'::jsonb) || jsonb_build_object(...)`. Operador `||` faz merge shallow preservando outras keys.
-- **Migration 0018 docs-only**: contém apenas `SELECT 1` no `Up` e `Down`. Não toca schema.
-- **HTTP status precedence Branch 10a/10b**: sensitive 503 com Retry-After: 5 antes de qualquer outra escrita; tier-1 unavailable 503 com Retry-After: 30. Códigos OpenAI envelope corretos.
-- **LGPD audit values coarse-grained**: `UpstreamShedSaturatedValue`, `UpstreamShedBlockedSensitiveValue`, `UpstreamShedTier1UnavailableValue` são strings constantes não contendo tenant_id, request_id, ou PII. Slug do tenant aparece em `GatewayShedBlockedSensitive{tenant=slug}` mas isso é a label canônica usada em todos os contadores Phase 4 — não é PII per CONTEXT.md D-B7.
+- **CR-01 audit propagation**: `middleware.go:248` espelha o padrão dos
+  Branches 10a (linha 203) e 10b (linha 223). O teste
+  `TestMiddleware_Branch09_FSMOn_NormalCapped` (linhas 358-375) confirma
+  que o handler interno enxerga `auditctx.UpstreamOverrideFromContext` ==
+  `"openrouter-chat"` e `auditctx.ShedDecisionFromContext` ==
+  `auditctx.UpstreamShedSaturatedValue`. Audit middleware lê o mesmo `*r`
+  pointer pós-`next.ServeHTTP` → enxerga overrides.
+- **CR-02 force gauge reset**: `tick.go:152` chama `Set(0)` no branch
+  `default` ANTES do `log.Warn + return`. Não há mais caminho onde o
+  gauge fica em 1 indefinidamente para valor malformado.
+- **WR-03 worker pool**: `mirror.go:78-85` cria buffered channel + 2
+  workers em construção; closure usa `select default → metric` —
+  non-blocking. Convergência preservada via reconcile loop (30s).
+- **WR-05 RWMutex hot path**: `inflight.go:73-80` agora pega RLock breve
+  para resolver `g`, `tmap`, `c`, `cok` coerentemente, depois atomic ops
+  sem lock. Microbenchmark esperado <50ns/op para read lock contention.
+- **WR-02 hot-reload propagation**: `upstreams/loader.go:82-87` valida
+  prefix `force:` em cada `Refresh()`, então hot-reload de upstreams
+  rejeita nomes reservados imediatamente. Tier-0/1 resolution não vai
+  retornar um upstream com nome `force:*`.
+- **shedInflight hot-reload (`main.go:450-466`)**: o listener
+  `upstreams.ListenAndReload` chama `shedInflight.AddUpstream(n)` para
+  cada nome em `loader.Names()` após `breakerSet.Rebuild` e
+  `shedSet.Rebuild` — três rebuilds coordenados em uma única closure.
+- **`Inc/Dec` unknown upstream signal**: ambos bumpam
+  `GatewayShedInflightUnknownUpstream{upstream, op}` ao invés de no-op
+  silencioso. Operadores agora têm sinal observável de wiring bug.
+- **Fail-open semantics preservadas**: TTL bounds (≤1h), DCGM URL vazio
+  (nil scraper retorna `(0, true)`), `MakePublishTransition(nil)` retorna
+  noop closure, `ReconcileLoop` com `rdb=nil` retorna imediatamente.
+  Sem regressões nos paths fail-open.
 
 ---
 
-_Reviewed: 2026-05-11T20:00:00Z_
+_Reviewed: 2026-05-11T22:00:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+_Prior review:_ `05-REVIEW.iter2.md` (2 BLOCKERs + 6 WARNINGs — all resolved)
+_Re-review trigger: fix-pass commits 3ea48b7..23d97ad_
