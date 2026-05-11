@@ -138,8 +138,14 @@ func TestPublishTransitionWritesAndPublishes(t *testing.T) {
 	_, c, _ := newShedSetWithRedis(t)
 	pub := MakePublishTransition(c)
 	pub("local-llm", StateOn, "test", &redisx.ShedEventSignals{Inflight: 4, P95Ms: 2100, VramMiB: 21000})
-	// Allow any goroutine-internal dispatch (impl is synchronous but defensive).
-	time.Sleep(30 * time.Millisecond)
+	// MakePublishTransition dispatches each call to a bounded worker pool
+	// (mirror.go: mirrorPublishWorkers goroutines drain a buffered channel
+	// of depth mirrorPublishQueueDepth). The publish is THEREFORE
+	// asynchronous — the sleep below is load-bearing, not defensive: we
+	// wait for the worker to drain the single queued job and complete the
+	// Redis HSET + PUBLISH before reading state back. 50ms is comfortable
+	// headroom over the typical miniredis round-trip (sub-ms).
+	time.Sleep(50 * time.Millisecond)
 	m, err := redisx.ReadShedState(ctx, c, "local-llm")
 	if err != nil || m == nil {
 		t.Fatalf("read: err=%v m=%v", err, m)
