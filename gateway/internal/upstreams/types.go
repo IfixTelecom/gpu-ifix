@@ -15,6 +15,12 @@ import (
 // AuthBearer is tagged json:"-" so it is NEVER serialized into log lines,
 // /v1/health/upstreams payloads, or gatewayctl JSON output (T-03-04-03
 // mitigation in 03-04-PLAN.md threat model).
+//
+// IsEmergency is set ONLY in the ephemeral copy returned by Resolve when
+// a tier-0 emergency override is active (Plan 06-08, D-E3). Persisted
+// snapshot rows always have IsEmergency=false. Dispatcher consults this
+// flag to decide whether to call EmergTrafficRegistrar.RegisterTraffic
+// (replaces fragile string-prefix matching on Name per W9 revision).
 type UpstreamConfig struct {
 	ID            uuid.UUID     `json:"id"`
 	Name          string        `json:"name"`
@@ -26,6 +32,13 @@ type UpstreamConfig struct {
 	Enabled       bool          `json:"enabled"`
 	Weight        *int32        `json:"weight,omitempty"` // Phase 5 populates
 	CircuitConfig CircuitConfig `json:"circuit_config"`
+
+	// IsEmergency is true when this UpstreamConfig was synthesised by
+	// Resolve from an active tier-0 override (Loader.OverrideTier0). The
+	// snapshot stored in Loader NEVER carries this flag — it is added in
+	// the ephemeral return value only. Dispatcher reads it to register
+	// traffic with the emergency reconciler (idle-grace detection).
+	IsEmergency bool `json:"-"`
 }
 
 // CircuitConfig overrides breaker defaults for a specific upstream. Loaded

@@ -49,6 +49,32 @@ import (
 // done in lockstep here.
 const UpstreamBlockedSensitiveValue = "blocked_sensitive"
 
+// EmergTrafficRegistrar abstracts the emerg.Reconciler for the dispatcher.
+// Plan 06-08 (D-E3) integration: when Resolve returns an UpstreamConfig
+// with IsEmergency=true (set by Loader.Resolve when a tier-0 emergency
+// override is active), dispatcher calls RegisterTraffic so the reconciler
+// can track lastEmergencyTrafficAt for the idle-grace destroy timer
+// (PROVISION_IDLE_GRACE_SECONDS, default 300s).
+//
+// Implemented by *emerg.Reconciler — but kept as an interface here to
+// (a) avoid an import cycle (proxy → emerg → ... → proxy via ws
+//
+//	signaling), and
+//
+// (b) make dispatcher tests trivially mockable without importing the
+//
+//	full reconciler stack.
+//
+// W9 revision (2026-05-13) — interface injection chosen over runtime
+// `strings.HasPrefix` sniffing on Name. The fragile string match would
+// silently break if a future plan renamed "emergency_pod_*" to anything
+// else; the IsEmergency flag is set deliberately by Loader.Resolve at
+// the same atomic instant the override URL is read, so dispatcher and
+// loader can never disagree about whether traffic is emergency-bound.
+type EmergTrafficRegistrar interface {
+	RegisterTraffic()
+}
+
 // DispatcherConfig groups the collaborators required to route a single
 // role's traffic. One DispatcherConfig per role (llm / stt / embed).
 type DispatcherConfig struct {
@@ -63,6 +89,14 @@ type DispatcherConfig struct {
 	// MUST contain entries for every upstream the loader can resolve to
 	// for this role; missing keys yield 503.
 	Proxies map[string]http.Handler
+
+	// EmergTraffic is the Plan 06-08 (D-E3) emergency traffic registrar.
+	// nil → no-op (Phase 6 disabled OR role != "llm"). When non-nil AND
+	// the resolved upstream carries IsEmergency=true, the dispatcher
+	// calls EmergTraffic.RegisterTraffic() before forwarding so the
+	// reconciler's idle-grace timer (D-D1, 5min default) sees recent
+	// activity and does NOT destroy the pod prematurely.
+	EmergTraffic EmergTrafficRegistrar
 
 	Log *slog.Logger
 }
@@ -176,6 +210,16 @@ func NewDispatcher(cfg DispatcherConfig) http.Handler {
 		}
 
 		sensitive := ac.DataClass == auth.DataClassSensitive
+
+		// Plan 06-08 D-E3: when the resolved tier-0 upstream is the
+		// emergency pod (Loader.Resolve set IsEmergency=true because
+		// OverrideTier0 is active), register traffic so the reconciler's
+		// idle-grace timer sees recent activity. We register BEFORE the
+		// breaker-state check so a HALF-OPEN probe to the emergency pod
+		// also counts as "user-facing traffic flowed in this window".
+		if t0.IsEmergency && cfg.EmergTraffic != nil {
+			cfg.EmergTraffic.RegisterTraffic()
+		}
 
 		// 4. Routing decision tree.
 		if t0State == gobreaker.StateClosed {

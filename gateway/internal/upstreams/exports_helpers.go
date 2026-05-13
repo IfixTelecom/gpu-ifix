@@ -18,7 +18,7 @@ package upstreams
 // Identical to NewLoaderForTest in loader_export_test.go (which is
 // accessible only to upstreams_test internal tests).
 func NewLoaderInMemory(cfgs ...UpstreamConfig) *Loader {
-	l := &Loader{}
+	l := &Loader{tier0Override: newTier0OverrideMap()}
 	s := &snapshot{
 		byName:     make(map[string]UpstreamConfig, len(cfgs)),
 		byRoleTier: make(map[RoleTier]UpstreamConfig, len(cfgs)),

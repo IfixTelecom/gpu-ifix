@@ -5,7 +5,7 @@ package upstreams
 // _test.go. Used by the unit tests for NewHealthHandler so we can
 // exercise the handler without standing up the integration harness.
 func NewLoaderForTest(cfgs ...UpstreamConfig) *Loader {
-	l := &Loader{}
+	l := &Loader{tier0Override: newTier0OverrideMap()}
 	s := &snapshot{
 		byName:     make(map[string]UpstreamConfig, len(cfgs)),
 		byRoleTier: make(map[RoleTier]UpstreamConfig, len(cfgs)),

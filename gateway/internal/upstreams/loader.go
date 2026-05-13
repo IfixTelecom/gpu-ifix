@@ -34,11 +34,27 @@ type loaderQueries interface {
 // Loader holds the in-memory authoritative snapshot of ai_gateway.upstreams.
 // Readers call Resolve/Get/All on the hot path (atomic.Pointer — lock-free).
 // Refresh is called at boot + on each LISTEN/NOTIFY from upstreams_changed.
+//
+// tier0Override is the Plan 06-08 emergency-pod dispatcher integration
+// point (D-E3). When the emerg reconciler reaches StateEmergencyActive it
+// calls OverrideTier0("llm", podURL); Resolve consults this map BEFORE
+// the snapshot for tier=0 reads and returns an UpstreamConfig with
+// URL=podURL + Name="emergency_pod_llm" + IsEmergency=true. RestoreTier0
+// clears the override on cutback (StateEmergencyActive → StateRecovering).
+//
+// LLM-only in v1 per CONTEXT.md D-E3. The map is initialised in
+// NewLoader / NewLoaderInMemory with a single "llm" key — STT/embed
+// continue tier-0 primary even during emergency (per CONTEXT D-E3).
+// Adding another role requires extending the map at construction time
+// (no runtime mutation of the map keys — only the atomic.Pointer values).
+//
+// All reads on Resolve's hot path are lockless atomic.Pointer.Load.
 type Loader struct {
-	pool *pgxpool.Pool
-	q    loaderQueries
-	snap atomic.Pointer[snapshot]
-	log  *slog.Logger
+	pool          *pgxpool.Pool
+	q             loaderQueries
+	snap          atomic.Pointer[snapshot]
+	log           *slog.Logger
+	tier0Override map[string]*atomic.Pointer[string]
 }
 
 // NewLoader constructs the Loader and performs the initial Refresh.
@@ -46,14 +62,26 @@ type Loader struct {
 // the upstreams table is unreadable).
 func NewLoader(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) (*Loader, error) {
 	l := &Loader{
-		pool: pool,
-		q:    gen.New(pool),
-		log:  log.With("module", "UPSTREAMS"),
+		pool:          pool,
+		q:             gen.New(pool),
+		log:           log.With("module", "UPSTREAMS"),
+		tier0Override: newTier0OverrideMap(),
 	}
 	if err := l.Refresh(ctx); err != nil {
 		return nil, fmt.Errorf("initial upstreams refresh: %w", err)
 	}
 	return l, nil
+}
+
+// newTier0OverrideMap returns the canonical Plan 06-08 emergency override
+// map. LLM-only in v1 per CONTEXT.md D-E3 — adding STT/embed roles to
+// this map enables runtime override for those roles too. The map keys are
+// fixed at construction time (no runtime ADD/DEL); only the atomic.Pointer
+// values are mutated.
+func newTier0OverrideMap() map[string]*atomic.Pointer[string] {
+	return map[string]*atomic.Pointer[string]{
+		"llm": new(atomic.Pointer[string]),
+	}
 }
 
 // Refresh loads all enabled rows and atomically swaps in a new snapshot.
@@ -152,13 +180,90 @@ func (l *Loader) Get(name string) (UpstreamConfig, bool) {
 
 // Resolve returns the upstream for (role, tier). Hot path used by the
 // dispatcher: tier-0 CLOSED → primary; tier-0 OPEN → Resolve(role, 1) for fallback.
+//
+// Plan 06-08 (D-E3) — when an emergency-pod override is active for this
+// role AND tier==0, Resolve returns an ephemeral UpstreamConfig with
+// URL=overrideURL, Name="emergency_pod_<role>", IsEmergency=true. The
+// override is NEVER applied to tier=1 (fallback chain stays untouched).
+// All other fields (CircuitConfig, AuthBearer, etc.) are inherited from
+// the underlying tier-0 row so the dispatcher's breaker + auth path
+// remains intact (the emergency pod is a Vast.ai 4090 with the same
+// llama.cpp stack — it accepts the same auth as local-llm if any).
 func (l *Loader) Resolve(role string, tier int) (UpstreamConfig, bool) {
 	s := l.snap.Load()
 	if s == nil {
 		return UpstreamConfig{}, false
 	}
+	if tier == 0 {
+		if p, ok := l.tier0Override[role]; ok {
+			if overridePtr := p.Load(); overridePtr != nil && *overridePtr != "" {
+				u, found := s.byRoleTier[RoleTier{Role: role, Tier: 0}]
+				if !found {
+					// No tier-0 row to base the override on — return the
+					// override URL with a synthesised name. Without a base
+					// row we have no CircuitConfig, no auth — accept the
+					// degradation rather than fail-close.
+					return UpstreamConfig{
+						Name:        "emergency_pod_" + role,
+						Role:        role,
+						Tier:        0,
+						URL:         *overridePtr,
+						Enabled:     true,
+						IsEmergency: true,
+					}, true
+				}
+				u.URL = *overridePtr
+				u.Name = "emergency_pod_" + role
+				u.IsEmergency = true
+				return u, true
+			}
+		}
+	}
 	u, ok := s.byRoleTier[RoleTier{Role: role, Tier: tier}]
 	return u, ok
+}
+
+// OverrideTier0 sets a runtime tier-0 override URL for the given role.
+// Plan 06-08 (D-E3) — called by emerg.Reconciler.markHealthy when the
+// emergency pod becomes healthy, so the dispatcher routes tier-0 LLM
+// traffic to the Vast.ai pod instead of the (failed) local-llm primary.
+//
+// No-op when role is not in the override map (only "llm" in v1) — non-LLM
+// roles continue tier-0 primary even during emergency. Race-free via
+// atomic.Pointer[string].Store; reads on Resolve hot path are lockless.
+//
+// The override persists until RestoreTier0(role) clears it. A second
+// OverrideTier0 call replaces the prior URL atomically.
+func (l *Loader) OverrideTier0(role, url string) {
+	p, ok := l.tier0Override[role]
+	if !ok {
+		return
+	}
+	if l.log != nil {
+		l.log.Info("tier-0 override activated (emerg)",
+			"role", role, "override_url", url)
+	}
+	urlCopy := url
+	p.Store(&urlCopy)
+}
+
+// RestoreTier0 clears the tier-0 override for the given role. Plan 06-08
+// (D-E3) — called by emerg.Reconciler.evaluateEmergencyActive when the
+// primary recovers (cutback: StateEmergencyActive → StateRecovering), so
+// dispatcher routes tier-0 LLM back to local-llm.
+//
+// No-op when role is not in the override map. Idempotent — calling
+// RestoreTier0 when no override is active is a Store(nil) of an already-
+// nil pointer (cheap atomic).
+func (l *Loader) RestoreTier0(role string) {
+	p, ok := l.tier0Override[role]
+	if !ok {
+		return
+	}
+	if l.log != nil {
+		l.log.Info("tier-0 override cleared (cutback)", "role", role)
+	}
+	p.Store(nil)
 }
 
 // All returns all upstreams ordered by (role, tier). Used by /v1/health/upstreams
