@@ -16,8 +16,9 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /build
 
-# Install git/ca-certs (needed for `go mod download` if deps are remote)
-RUN apk add --no-cache ca-certificates git
+# Install git/ca-certs (needed for `go mod download` if deps are remote).
+# tzdata provides /usr/share/zoneinfo which is COPYed into the distroless runtime.
+RUN apk add --no-cache ca-certificates git tzdata
 
 # Dependency layer cache: copy go.mod/go.sum first.
 # go.sum is optional in Phase 1 (stdlib-only; pkg/openai has no transitive deps).
