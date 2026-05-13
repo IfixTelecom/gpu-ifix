@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/go-redsync/redsync/v4"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -119,6 +120,29 @@ type Reconciler struct {
 	lastExtendUnix atomic.Int64 // unix-seconds of the most recent successful Extend or initial Lock
 	replicaID      string
 	q              *gen.Queries
+
+	// tracker is the per-replica `local-llm` breaker mirror fed by the
+	// gw:breaker:events Pub/Sub consumer (Plan 06-05 Task 1). The reader
+	// is the reconciler tick (evaluateHealthy); the writer is the
+	// Subscribe goroutine. Both atomic so no mutex required.
+	tracker *localLlmTracker
+
+	// activeLifecycle holds the in-flight emergency lifecycle row when
+	// the FSM is in EmergencyProvisioning/Active/Recovering. Set by
+	// Plan 06-06 startProvisioning; consulted by applyEmergCommand to
+	// resolve force-destroy targets. nil when no live lifecycle.
+	activeLifecycle atomic.Pointer[ActiveLifecycle]
+}
+
+// ActiveLifecycle is the minimal in-memory snapshot of the live
+// emergency lifecycle row. Plan 06-05 only declares the type + field
+// surface; Plan 06-06 wiring (startProvisioning) is the first writer.
+// The applyEmergCommand force-destroy branch (Plan 06-05 Task 3) is the
+// first reader.
+type ActiveLifecycle struct {
+	ID             int64
+	VastInstanceID int64 // 0 when bid not yet accepted
+	StartedUnix    int64
 }
 
 // NewReconciler constructs a Reconciler with sensible defaults applied
@@ -146,6 +170,7 @@ func NewReconciler(deps Deps) *Reconciler {
 	r := &Reconciler{
 		deps:      deps,
 		replicaID: hostname,
+		tracker:   newLocalLlmTracker(),
 	}
 	if deps.DB != nil {
 		r.q = gen.New(deps.DB)
@@ -200,6 +225,16 @@ func (r *Reconciler) Run(ctx context.Context) {
 	}
 
 	mutex := r.deps.Redsync.NewMutex(redisx.EmergLockKey(), defaultMutexOptions()...)
+
+	// W11 ordering invariant (Plan 06-05): spawn Pub/Sub subscribers
+	// BEFORE the ticker fires. Pub/Sub is at-most-once with no replay,
+	// so a publish that arrives before the first SUBSCRIBE registers is
+	// silently lost. By spawning before the ticker, the worst case is
+	// the subscriber registers slightly before the leader-election tick
+	// — still atomically before any state-change publish from the same
+	// reconciler's FSM transitions.
+	go r.Subscribe(ctx)              // gw:breaker:events → tracker
+	go r.SubscribeEmergCommands(ctx) // gw:emerg:events  → applyEmergCommand
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -281,20 +316,206 @@ func (r *Reconciler) runOneTick(ctx context.Context, mutex *redsync.Mutex, now t
 	r.evaluateTick(ctx, now, log)
 }
 
-// evaluateTick is the FSM transition evaluation hook. Plan 04 leaves it
-// as a Debug-level log so the leader path is exercised in tests without
-// pulling in trigger/provisioning logic. Plans 05-08 extend this method
-// incrementally:
+// evaluateTick is the FSM transition evaluation dispatcher. Plan 06-05
+// implements the StateHealthy branch (trigger gate); Plans 06-08 extend
+// the remaining cases incrementally:
 //
-//   - Plan 05 (trigger): observe local-llm breaker.OPEN sustain timer;
-//     transition HEALTHY/DEGRADED → FAILED_OVER → EMERGENCY_PROVISIONING.
-//   - Plan 06 (provisioning): drive Vast.ai bid + create + /health poll;
-//     transition EMERGENCY_PROVISIONING → EMERGENCY_ACTIVE.
-//   - Plan 07 (cancel/recovery): cancel-in-flight + leader-recovery
-//     orphan reconcile.
-//   - Plan 08 (cutback): RECOVERING grace + IDLE_GRACE destroy +
-//     COOLDOWN suppression window.
-func (r *Reconciler) evaluateTick(_ context.Context, _ time.Time, log *slog.Logger) {
-	log.Debug("leader tick (stub — Plans 05-08 implement transitions)",
-		"state", r.deps.FSM.State().String())
+//   - Plan 05 (trigger):     HEALTHY → FAILED_OVER → EMERGENCY_PROVISIONING
+//                            when local-llm OPEN sustained ≥ threshold.
+//   - Plan 06 (provisioning): EMERGENCY_PROVISIONING → EMERGENCY_ACTIVE
+//                            via Vast.ai bid+create+/health poll.
+//   - Plan 07 (cancel/recovery): cancel-in-flight + leader-recovery orphan
+//                            reconcile.
+//   - Plan 08 (cutback):     RECOVERING grace + IDLE_GRACE destroy +
+//                            COOLDOWN suppression window.
+func (r *Reconciler) evaluateTick(ctx context.Context, now time.Time, log *slog.Logger) {
+	switch r.deps.FSM.State() {
+	case StateHealthy:
+		r.evaluateHealthy(ctx, now, log)
+	default:
+		// Plans 06-08 extend this dispatcher with cases for the other 6
+		// states. Until then, log at Debug so the leader path is
+		// exercised in tests without firing trigger/provisioning logic.
+		log.Debug("evaluateTick: state not yet handled (Plans 06-08)",
+			"state", r.deps.FSM.State().String())
+	}
+}
+
+// evaluateHealthy is the StateHealthy branch of the reconciler tick. Plan
+// 06-05 trigger gate (PRV-04 / SC-1):
+//
+//  1. Read tracker.SustainedFailedOverSeconds() — the local-llm breaker
+//     has been OPEN this long according to the per-replica Pub/Sub
+//     consumer.
+//  2. If under the cfg.ProvisionTriggerFailedOverSeconds threshold (D-C1
+//     default 120s; tests override to 1s via defaultTestCfg), return —
+//     trigger not yet armed.
+//  3. D-C5 reconciler check: query ai_gateway.emergency_lifecycles for a
+//     live row (ended_at IS NULL). If one exists, the partial unique
+//     index already protects against split-brain INSERT — but we abort
+//     anyway and log Error so the operator notices a stale lifecycle
+//     row blocking re-trigger.
+//  4. Transition HEALTHY → FAILED_OVER → EMERGENCY_PROVISIONING. The
+//     intermediate FAILED_OVER state is intentionally transient — Plan
+//     06 evaluateEmergencyProvisioning will pick up the new state on
+//     the next tick and call startProvisioning.
+//
+// Plan 06-05 stops here — no Vast.ai call, no lifecycle INSERT (the
+// trigger fires whenever sustained ≥ threshold; the provisioning path
+// lands in Plan 06-06 and is responsible for the lifecycle INSERT).
+func (r *Reconciler) evaluateHealthy(ctx context.Context, now time.Time, log *slog.Logger) {
+	sustained := r.tracker.SustainedFailedOverSeconds()
+	if sustained < int64(r.deps.Cfg.ProvisionTriggerFailedOverSeconds) {
+		return
+	}
+	// D-C5 reconciler check — never spawn a second lifecycle while one
+	// is live. The partial unique index `emergency_live_singleton`
+	// (Plan 06-02) is the authoritative gate at INSERT time; this query
+	// is a defensive pre-check so we surface the conflict in logs
+	// instead of as a Postgres error during Plan 06-06's INSERT.
+	if r.q != nil {
+		live, err := r.q.ListLiveEmergencyLifecycles(ctx)
+		if err != nil {
+			log.Error("query live lifecycles failed; skipping trigger",
+				"err", err, "sustained_seconds", sustained)
+			return
+		}
+		if len(live) > 0 {
+			log.Error("live lifecycle exists; trigger blocked (D-C5 reconciler check)",
+				"count", len(live), "live_id", live[0].ID, "sustained_seconds", sustained)
+			return
+		}
+	}
+	log.Info("emergency trigger fired",
+		"sustained_seconds", sustained,
+		"threshold", r.deps.Cfg.ProvisionTriggerFailedOverSeconds)
+	// Two-step transition: HEALTHY → FAILED_OVER (transient marker —
+	// records the trigger time on the FSM enteredAt clock) →
+	// EMERGENCY_PROVISIONING (the state the next tick consumes).
+	r.deps.FSM.Transition(StateHealthy, StateFailedOver, now, "local_llm_open_sustained")
+	r.deps.FSM.Transition(StateFailedOver, StateEmergencyProvisioning, now, "trigger_failed_over_sustained")
+}
+
+// applyEmergCommand dispatches a typed EmergEvent received on
+// gw:emerg:events to the appropriate handler. Plan 06-05 Task 3
+// (BLOCKER 2 fix 2026-05-13):
+//
+//   - force_provision_request: leader-only INSERT lifecycle row with
+//     trigger_reason='manual_force' + advance FSM HEALTHY →
+//     EMERGENCY_PROVISIONING. Non-leader replicas observe the event but
+//     do NOT mutate state (single-leader invariant PRV-03).
+//   - force_destroy_request:   leader-only call destroyAndCloseLifecycle
+//     with shutdown_reason='manual'. Plan 08 owns the helper
+//     implementation; Plan 05 ships a logging-only stub so the consumer
+//     wiring + leader-only filter are testable in isolation.
+//   - transition / cancel_in_flight / lifecycle_close / unknown:
+//     visibility-only — log at Debug and return.
+//
+// The leader-only filter intentionally runs BEFORE the type switch so
+// every command type observes identical filtering semantics (no
+// per-type bypass).
+func (r *Reconciler) applyEmergCommand(ctx context.Context, ev redisx.EmergEvent, log *slog.Logger) {
+	if !r.isLeader.Load() {
+		log.Debug("non-leader observed emerg command; ignoring",
+			"type", ev.Type, "by_replica", ev.ReplicaID)
+		return
+	}
+	switch ev.Type {
+	case "force_provision_request":
+		r.handleForceProvision(ctx, ev, log)
+	case "force_destroy_request":
+		r.handleForceDestroy(ctx, ev, log)
+	case "transition", "cancel_in_flight", "lifecycle_close":
+		// Self-published or cross-replica visibility events — leader
+		// already authored these; no action required.
+		return
+	default:
+		log.Debug("unknown emerg event type; ignoring", "type", ev.Type)
+	}
+}
+
+// handleForceProvision is the leader-side handler for a
+// force_provision_request command. INSERTs a lifecycle row with
+// trigger_reason='manual_force' BEFORE the FSM transition (D-C5: the
+// partial unique index is the gate; INSERT-first surfaces conflicts via
+// pg unique violation rather than a silent FSM-only transition). On
+// success, transitions HEALTHY → FAILED_OVER → EMERGENCY_PROVISIONING.
+//
+// Plan 06-05 stops at the FSM transition — Plan 06-06
+// evaluateEmergencyProvisioning will pick up the new state on the next
+// tick and drive the Vast.ai provisioning path.
+func (r *Reconciler) handleForceProvision(ctx context.Context, ev redisx.EmergEvent, log *slog.Logger) {
+	if r.q == nil {
+		log.Error("force-provision rejected: no DB pool wired (test misconfiguration)",
+			"by_replica", ev.ReplicaID)
+		return
+	}
+	live, err := r.q.ListLiveEmergencyLifecycles(ctx)
+	if err != nil {
+		log.Error("force-provision: query live lifecycles failed",
+			"err", err, "by_replica", ev.ReplicaID)
+		return
+	}
+	if len(live) > 0 {
+		log.Warn("force-provision rejected: live lifecycle already exists",
+			"live_count", len(live), "live_id", live[0].ID, "by_replica", ev.ReplicaID)
+		return
+	}
+	id, err := r.q.InsertEmergencyLifecycle(ctx, gen.InsertEmergencyLifecycleParams{
+		TriggerReason: "manual_force",
+		LeaderReplica: pgtype.Text{String: r.replicaID, Valid: true},
+	})
+	if err != nil {
+		log.Error("force-provision: InsertEmergencyLifecycle failed",
+			"err", err, "by_replica", ev.ReplicaID)
+		return
+	}
+	r.activeLifecycle.Store(&ActiveLifecycle{
+		ID:          id,
+		StartedUnix: time.Now().Unix(),
+	})
+	now := time.Now()
+	r.deps.FSM.Transition(StateHealthy, StateFailedOver, now, "manual_force_provision:"+ev.Reason)
+	r.deps.FSM.Transition(StateFailedOver, StateEmergencyProvisioning, now, "manual_force_provision:"+ev.Reason)
+	log.Info("force-provision accepted",
+		"lifecycle_id", id, "reason", ev.Reason, "by_replica", ev.ReplicaID)
+}
+
+// handleForceDestroy is the leader-side handler for a
+// force_destroy_request command. When no active lifecycle exists, logs
+// Warn and returns (no-op). When a live lifecycle exists, delegates to
+// destroyAndCloseLifecycle — a Plan 06-08 helper — and transitions FSM
+// → COOLDOWN on success.
+//
+// Plan 06-05 ships a logging-only stub for destroyAndCloseLifecycle so
+// the subscriber wiring + leader-only filter + no-op-when-idle path are
+// testable. The integration test for the active-lifecycle destroy path
+// is deferred to Plan 06-08 alongside the helper itself.
+func (r *Reconciler) handleForceDestroy(ctx context.Context, ev redisx.EmergEvent, log *slog.Logger) {
+	lc := r.activeLifecycle.Load()
+	if lc == nil {
+		log.Warn("force-destroy: no active lifecycle to destroy",
+			"by_replica", ev.ReplicaID)
+		return
+	}
+	if err := r.destroyAndCloseLifecycle(ctx, lc, "manual"); err != nil {
+		log.Error("force-destroy failed",
+			"id", lc.ID, "err", err, "by_replica", ev.ReplicaID)
+		return
+	}
+	r.deps.FSM.Transition(r.deps.FSM.State(), StateCooldown, time.Now(), "manual_force_destroy")
+	log.Info("force-destroy accepted",
+		"lifecycle_id", lc.ID, "by_replica", ev.ReplicaID)
+}
+
+// destroyAndCloseLifecycle is a Plan 06-08 helper. Plan 06-05 ships a
+// logging-only stub so handleForceDestroy can be wired + tested
+// end-to-end. When Plan 06-08 lands, this method body is replaced with
+// the real Vast.ai destroy_instance + CloseEmergencyLifecycle path; the
+// signature is kept stable so handleForceDestroy does not need to change.
+func (r *Reconciler) destroyAndCloseLifecycle(_ context.Context, lc *ActiveLifecycle, reason string) error {
+	r.deps.Log.Info("destroyAndCloseLifecycle stub (Plan 06-08 implements)",
+		"lifecycle_id", lc.ID, "reason", reason)
+	r.activeLifecycle.Store(nil)
+	return nil
 }
