@@ -442,3 +442,154 @@ func TestLoad_Phase4FloatOrBogusValue(t *testing.T) {
 		t.Errorf("USDBRLDefault on bogus input: want 5.10 fallback, got %v", cfg.USDBRLDefault)
 	}
 }
+
+// phase6OptionalEnv enumerates the eleven Phase 6 emergency-pod env vars.
+// Cleared in setUp so a stray Portainer value does not leak into the
+// default-value assertions.
+var phase6OptionalEnv = []string{
+	"EMERGENCY_POD_IMAGE_TAG",
+	"MONTHLY_EMERGENCY_BUDGET_BRL",
+	"PRIMARY_HOST_ID",
+	"PROVISION_COLDSTART_BUDGET_SECONDS",
+	"PROVISION_HEALTHY_DURATION_SECONDS",
+	"PROVISION_IDLE_GRACE_SECONDS",
+	"PROVISION_TRIGGER_FAILED_OVER_SECONDS",
+	"USD_TO_BRL_RATE",
+	"VAST_AI_API_KEY",
+	"VAST_API_QPS_LIMIT",
+	"VAST_PRICE_CAP_DPH",
+}
+
+func clearPhase6(t *testing.T) {
+	t.Helper()
+	for _, v := range phase6OptionalEnv {
+		t.Setenv(v, "")
+	}
+}
+
+// TestLoad_Phase6Defaults validates that with no Phase 6 env vars set,
+// Load returns the documented Wave-0 defaults from
+// .planning/phases/06-auto-provisioning-emergency-pod-vast-ai/06-CONTEXT.md
+// decisions D-A1, D-A4, D-A5, D-C1, D-D1, D-D2, D-D4 (per 06-01 Plan
+// Behavior Test 6). VastAIAPIKey defaults empty to graceful-degrade
+// (the reconciler logs a warning and stays disabled rather than
+// failing boot — Phase 6 is opt-in until 06-WAVE0-GATES.md is closed).
+func TestLoad_Phase6Defaults(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.EmergencyPodImageTag != "v1.0" {
+		t.Errorf("EmergencyPodImageTag = %q, want v1.0", cfg.EmergencyPodImageTag)
+	}
+	if cfg.MonthlyEmergencyBudgetBRL != 200.0 {
+		t.Errorf("MonthlyEmergencyBudgetBRL = %v, want 200.0 (D-D2)", cfg.MonthlyEmergencyBudgetBRL)
+	}
+	if cfg.PrimaryHostID != 0 {
+		t.Errorf("PrimaryHostID = %d, want 0 (unknown — D-A2)", cfg.PrimaryHostID)
+	}
+	if cfg.ProvisionColdStartBudgetSeconds != 600 {
+		t.Errorf("ProvisionColdStartBudgetSeconds = %d, want 600 (D-A4)", cfg.ProvisionColdStartBudgetSeconds)
+	}
+	if cfg.ProvisionHealthyDurationSeconds != 300 {
+		t.Errorf("ProvisionHealthyDurationSeconds = %d, want 300 (D-D1)", cfg.ProvisionHealthyDurationSeconds)
+	}
+	if cfg.ProvisionIdleGraceSeconds != 300 {
+		t.Errorf("ProvisionIdleGraceSeconds = %d, want 300 (D-D1)", cfg.ProvisionIdleGraceSeconds)
+	}
+	if cfg.ProvisionTriggerFailedOverSeconds != 120 {
+		t.Errorf("ProvisionTriggerFailedOverSeconds = %d, want 120 (D-C1)", cfg.ProvisionTriggerFailedOverSeconds)
+	}
+	if cfg.USDToBRLRate != 5.0 {
+		t.Errorf("USDToBRLRate = %v, want 5.0 (D-D4)", cfg.USDToBRLRate)
+	}
+	if cfg.VastAIAPIKey != "" {
+		t.Errorf("VastAIAPIKey: want empty default (graceful-degrade per D-A5), got %q", cfg.VastAIAPIKey)
+	}
+	if cfg.VastAPIQPSLimit != 1 {
+		t.Errorf("VastAPIQPSLimit = %d, want 1 (RESEARCH OQ12)", cfg.VastAPIQPSLimit)
+	}
+	if cfg.VastPriceCapDPH != 0.40 {
+		t.Errorf("VastPriceCapDPH = %v, want 0.40 (D-A2)", cfg.VastPriceCapDPH)
+	}
+}
+
+// TestLoad_Phase6CustomValues exercises floatOr / atoiOr overrides for the
+// Phase 6 env vars. Includes a bogus VAST_PRICE_CAP_DPH to confirm the
+// floatOr fallback prevents 0.0 cap (which would reject every offer).
+func TestLoad_Phase6CustomValues(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	setAllRequired(t)
+	t.Setenv("VAST_PRICE_CAP_DPH", "0.55")
+	t.Setenv("MONTHLY_EMERGENCY_BUDGET_BRL", "350")
+	t.Setenv("USD_TO_BRL_RATE", "5.42")
+	t.Setenv("PROVISION_TRIGGER_FAILED_OVER_SECONDS", "60")
+	t.Setenv("PROVISION_COLDSTART_BUDGET_SECONDS", "300")
+	t.Setenv("VAST_AI_API_KEY", "fake-key-1234")
+	t.Setenv("PRIMARY_HOST_ID", "987654")
+	t.Setenv("EMERGENCY_POD_IMAGE_TAG", "v1.1-rc2")
+	t.Setenv("VAST_API_QPS_LIMIT", "2")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.VastPriceCapDPH != 0.55 {
+		t.Errorf("VastPriceCapDPH override = %v, want 0.55", cfg.VastPriceCapDPH)
+	}
+	if cfg.MonthlyEmergencyBudgetBRL != 350.0 {
+		t.Errorf("MonthlyEmergencyBudgetBRL override = %v, want 350.0", cfg.MonthlyEmergencyBudgetBRL)
+	}
+	if cfg.USDToBRLRate != 5.42 {
+		t.Errorf("USDToBRLRate override = %v, want 5.42", cfg.USDToBRLRate)
+	}
+	if cfg.ProvisionTriggerFailedOverSeconds != 60 {
+		t.Errorf("ProvisionTriggerFailedOverSeconds override = %d, want 60", cfg.ProvisionTriggerFailedOverSeconds)
+	}
+	if cfg.ProvisionColdStartBudgetSeconds != 300 {
+		t.Errorf("ProvisionColdStartBudgetSeconds override = %d, want 300", cfg.ProvisionColdStartBudgetSeconds)
+	}
+	if cfg.VastAIAPIKey != "fake-key-1234" {
+		t.Errorf("VastAIAPIKey override = %q, want fake-key-1234", cfg.VastAIAPIKey)
+	}
+	if cfg.PrimaryHostID != 987654 {
+		t.Errorf("PrimaryHostID override = %d, want 987654", cfg.PrimaryHostID)
+	}
+	if cfg.EmergencyPodImageTag != "v1.1-rc2" {
+		t.Errorf("EmergencyPodImageTag override = %q, want v1.1-rc2", cfg.EmergencyPodImageTag)
+	}
+	if cfg.VastAPIQPSLimit != 2 {
+		t.Errorf("VastAPIQPSLimit override = %d, want 2", cfg.VastAPIQPSLimit)
+	}
+}
+
+// TestLoad_Phase6FloatOrBogusValue confirms that a bogus VAST_PRICE_CAP_DPH
+// env value falls back to the default 0.40 rather than silently becoming
+// 0.0 (which would reject every offer, defeating the purpose of the
+// emergency reconciler — analog to Phase 4 USD_BRL Pitfall 6).
+func TestLoad_Phase6FloatOrBogusValue(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	setAllRequired(t)
+	t.Setenv("VAST_PRICE_CAP_DPH", "not-a-price")
+	t.Setenv("MONTHLY_EMERGENCY_BUDGET_BRL", "garbage")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.VastPriceCapDPH != 0.40 {
+		t.Errorf("VastPriceCapDPH on bogus input: want 0.40 fallback, got %v", cfg.VastPriceCapDPH)
+	}
+	if cfg.MonthlyEmergencyBudgetBRL != 200.0 {
+		t.Errorf("MonthlyEmergencyBudgetBRL on bogus input: want 200.0 fallback, got %v", cfg.MonthlyEmergencyBudgetBRL)
+	}
+}

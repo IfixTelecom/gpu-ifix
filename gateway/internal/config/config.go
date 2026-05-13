@@ -115,6 +115,24 @@ type Config struct {
 	WriteTimeoutChatS  int // GATEWAY_WRITE_TIMEOUT_CHAT_S  (default 0 — unlimited for SSE)
 	WriteTimeoutEmbedS int // GATEWAY_WRITE_TIMEOUT_EMBED_S (default 30)
 	WriteTimeoutAudioS int // GATEWAY_WRITE_TIMEOUT_AUDIO_S (default 120; Whisper multipart)
+
+	// Phase 6 — emergency-pod auto-provisioning (Vast.ai). All eleven
+	// fields are read at boot; defaults match CONTEXT.md decisions
+	// D-A1..D-D4 + 06-WAVE0-GATES.md. VastAIAPIKey empty does NOT
+	// fail boot — the reconciler logs a warning and stays disabled
+	// (graceful degrade so a missing dev secret does not block the
+	// rest of the gateway from serving traffic).
+	EmergencyPodImageTag              string  // EMERGENCY_POD_IMAGE_TAG (default "v1.0"; Phase 1 publishes both :v1.0 and :latest)
+	MonthlyEmergencyBudgetBRL         float64 // MONTHLY_EMERGENCY_BUDGET_BRL (default 200.0; D-D2 — Sentry alert only, no auto-block)
+	PrimaryHostID                     int64   // PRIMARY_HOST_ID (default 0 = unknown; D-A2 host_id != filter only applied if known)
+	ProvisionColdStartBudgetSeconds   int     // PROVISION_COLDSTART_BUDGET_SECONDS (default 600; D-A4 — /health poll budget)
+	ProvisionHealthyDurationSeconds   int     // PROVISION_HEALTHY_DURATION_SECONDS (default 300; D-D1 — primary must be healthy this long before cutback)
+	ProvisionIdleGraceSeconds         int     // PROVISION_IDLE_GRACE_SECONDS (default 300; D-D1 — emergency pod idle grace before destroy)
+	ProvisionTriggerFailedOverSeconds int     // PROVISION_TRIGGER_FAILED_OVER_SECONDS (default 120; D-C1 — local-llm OPEN must persist this long)
+	USDToBRLRate                      float64 // USD_TO_BRL_RATE (default 5.0; D-D4 — operator updates quarterly for cost audit)
+	VastAIAPIKey                      string  // VAST_AI_API_KEY (D-A5; empty = Phase 6 disabled with warning, NOT fail-loud)
+	VastAPIQPSLimit                   int     // VAST_API_QPS_LIMIT (default 1; RESEARCH Open Question 12 — conservative 1 req/s token bucket)
+	VastPriceCapDPH                   float64 // VAST_PRICE_CAP_DPH (default 0.40; D-A2 — RTX 4090 cap; epsilon comparison cap+0.0001 per Pitfall 5)
 }
 
 // ErrMissingEnv is returned by Load when one or more required env vars are unset.
@@ -184,6 +202,21 @@ func Load() (Config, error) {
 		WriteTimeoutChatS:  atoiOr(os.Getenv("GATEWAY_WRITE_TIMEOUT_CHAT_S"), 0),
 		WriteTimeoutEmbedS: atoiOr(os.Getenv("GATEWAY_WRITE_TIMEOUT_EMBED_S"), 30),
 		WriteTimeoutAudioS: atoiOr(os.Getenv("GATEWAY_WRITE_TIMEOUT_AUDIO_S"), 120),
+
+		// Phase 6 — emergency pod (CONTEXT.md D-A1..D-D4). All defaults
+		// conservative. Operator confirms production values via
+		// 06-WAVE0-GATES.md before Phase 6 LIVE UAT (Plan 06-11).
+		EmergencyPodImageTag:              envOr("EMERGENCY_POD_IMAGE_TAG", "v1.0"),
+		MonthlyEmergencyBudgetBRL:         floatOr(os.Getenv("MONTHLY_EMERGENCY_BUDGET_BRL"), 200.0),
+		PrimaryHostID:                     int64(atoiOr(os.Getenv("PRIMARY_HOST_ID"), 0)),
+		ProvisionColdStartBudgetSeconds:   atoiOr(os.Getenv("PROVISION_COLDSTART_BUDGET_SECONDS"), 600),
+		ProvisionHealthyDurationSeconds:   atoiOr(os.Getenv("PROVISION_HEALTHY_DURATION_SECONDS"), 300),
+		ProvisionIdleGraceSeconds:         atoiOr(os.Getenv("PROVISION_IDLE_GRACE_SECONDS"), 300),
+		ProvisionTriggerFailedOverSeconds: atoiOr(os.Getenv("PROVISION_TRIGGER_FAILED_OVER_SECONDS"), 120),
+		USDToBRLRate:                      floatOr(os.Getenv("USD_TO_BRL_RATE"), 5.0),
+		VastAIAPIKey:                      os.Getenv("VAST_AI_API_KEY"),
+		VastAPIQPSLimit:                   atoiOr(os.Getenv("VAST_API_QPS_LIMIT"), 1),
+		VastPriceCapDPH:                   floatOr(os.Getenv("VAST_PRICE_CAP_DPH"), 0.40),
 	}
 
 	// Iterate in a fixed order so error messages are deterministic — tests
