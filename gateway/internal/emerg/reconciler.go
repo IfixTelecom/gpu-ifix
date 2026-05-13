@@ -43,6 +43,7 @@ import (
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
 	gen "github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/emerg/vast"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/redisx"
 )
 
@@ -105,6 +106,12 @@ type Deps struct {
 	// reconciler attaches a `subsystem=emerg.reconciler` field plus the
 	// per-replica replicaID at Run start.
 	Log *slog.Logger
+
+	// Vast is the Vast.ai REST client. NewReconciler auto-builds one
+	// from Cfg.VastAIAPIKey when nil AND the key is non-empty; tests
+	// inject a mock via the SetVastClient helper instead. Plan 06-06+
+	// reads this for the provisioning lifecycle.
+	Vast VastAPI
 }
 
 // Reconciler is the leader-elected loop owner. Construct via
@@ -132,6 +139,25 @@ type Reconciler struct {
 	// Plan 06-06 startProvisioning; consulted by applyEmergCommand to
 	// resolve force-destroy targets. nil when no live lifecycle.
 	activeLifecycle atomic.Pointer[ActiveLifecycle]
+
+	// activePodURL is the /health URL of the live emergency pod when the
+	// FSM is in EmergencyActive. Plan 08 dispatcher reads this on every
+	// request via ActivePodURL(). nil when no pod is healthy.
+	activePodURL atomic.Pointer[string]
+
+	// lifecycleCancel holds the cancel func for the in-flight provisioning
+	// goroutine. Plan 07 will call (*lifecycleCancel)() on local-llm
+	// recovery (cancel-in-flight). Stored as **func() so atomic.Swap
+	// returns the previous pointer cleanly. nil when no provisioning
+	// goroutine is running.
+	lifecycleCancel atomic.Pointer[context.CancelFunc]
+
+	// vastOverride and healthCheckOverride are test-only injection slots.
+	// Production leaves both nil and reads VastAPI from deps.Vast / does
+	// the real HTTP /health probe inside checkHealth. SetVastClient and
+	// SetHealthCheck (lifecycle.go) populate these in tests.
+	vastOverride        VastAPI
+	healthCheckOverride HealthChecker
 }
 
 // ActiveLifecycle is the minimal in-memory snapshot of the live
@@ -166,6 +192,12 @@ func NewReconciler(deps Deps) *Reconciler {
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"
+	}
+	// Auto-build a real Vast.ai client when the operator provided an API
+	// key but did not inject a VastAPI (tests inject mocks via the
+	// SetVastClient helper instead).
+	if deps.Vast == nil && deps.Cfg.VastAIAPIKey != "" {
+		deps.Vast = vast.NewClient(deps.Cfg.VastAIAPIKey)
 	}
 	r := &Reconciler{
 		deps:      deps,
@@ -332,11 +364,19 @@ func (r *Reconciler) evaluateTick(ctx context.Context, now time.Time, log *slog.
 	switch r.deps.FSM.State() {
 	case StateHealthy:
 		r.evaluateHealthy(ctx, now, log)
+	case StateEmergencyProvisioning:
+		// Plan 06-06 — spawn the provisioning goroutine on the first tick
+		// after the FSM enters this state (idempotent: subsequent ticks
+		// are no-ops while activeLifecycle is non-nil).
+		if r.activeLifecycle.Load() == nil {
+			r.startProvisioning(ctx)
+		}
 	default:
-		// Plans 06-08 extend this dispatcher with cases for the other 6
-		// states. Until then, log at Debug so the leader path is
-		// exercised in tests without firing trigger/provisioning logic.
-		log.Debug("evaluateTick: state not yet handled (Plans 06-08)",
+		// Plans 06-07 (cancel/recovery) + 06-08 (cutback) extend this
+		// dispatcher with cases for the remaining states. Until then, log
+		// at Debug so the leader path is exercised in tests without
+		// firing trigger/provisioning logic.
+		log.Debug("evaluateTick: state not yet handled (Plans 06-07/08)",
 			"state", r.deps.FSM.State().String())
 	}
 }

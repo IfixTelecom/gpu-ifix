@@ -1,0 +1,722 @@
+// Package emerg (lifecycle.go): Plan 06-06 emergency-pod provisioning
+// goroutine — the SC-1 happy path "EMERGENCY_PROVISIONING →
+// EMERGENCY_ACTIVE" via Vast.ai bid+create+/health-poll.
+//
+// # Goroutine layout
+//
+// `startProvisioning(ctx)` is called from `evaluateEmergencyProvisioning`
+// (the StateEmergencyProvisioning branch of evaluateTick) when no
+// activeLifecycle is currently in flight. It:
+//
+//  1. INSERTs the lifecycle row (D-D5: row exists BEFORE any Vast call so
+//     leader-recovery can find orphans by `vast_instance_id IS NULL`).
+//  2. Stores the activeLifecycle pointer (consumed by handleForceDestroy
+//     and Plan 07 cancel-in-flight).
+//  3. Spawns the long-running `provisionLifecycle` goroutine.
+//  4. Records the provision duration on a Prometheus histogram.
+//
+// # provisionLifecycle algorithm
+//
+//   - SearchOffers (filter epsilon cap+0.0001 per Pitfall 5)
+//   - Up to 3 attempts with 2s/4s/8s exponential backoff:
+//       * CreateInstance
+//       * On ErrOfferGone (404+no_such_ask), re-search and retry
+//       * On any other error, abort
+//       * On success, transition to waitForReadyOrDestroy
+//   - On 3 race losses: Sentry CaptureMessage + close lifecycle with
+//     shutdown_reason='offer_race_lost'.
+//
+// # waitForReadyOrDestroy algorithm
+//
+// Polls GetInstance every 5 seconds (configurable via
+// `instancePollInterval`). Three exit paths:
+//
+//   - ctx.Done()                               → DestroyInstance + close('cancelled_in_flight')
+//   - deadline (cfg.ProvisionColdStartBudgetSeconds) → DestroyInstance + close('health_timeout')
+//   - actual_status ∈ {exited, unknown, offline} (Pitfall 9) → DestroyInstance + close('instance_terminal_state')
+//   - actual_status==running AND public_ipaddr!=""
+//     AND ports populated AND /health returns {status:healthy} → markHealthy + return nil
+//
+// # D-D3 events JSONB FIRST (W7 fix 2026-05-13)
+//
+// `UpdateEmergencyLifecycleVastIDs` is the FIRST DB write after
+// CreateInstance succeeds — it carries the `offer_accepted` event JSONB
+// in the same UPDATE as the vast_offer_id / vast_instance_id columns.
+// Audit log atomicity: the events array reflects the in-flight state
+// before any other in-process state mutation.
+package emerg
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/getsentry/sentry-go"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	gen "github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/emerg/vast"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
+)
+
+const (
+	// instancePollInterval is the cadence of GetInstance polling inside
+	// waitForReadyOrDestroy. 5s matches CONTEXT.md D-A4 ("polling /health
+	// a cada 5s"); package-level constant rather than env-tunable because
+	// re-tuning requires re-validating the Pitfall 9 terminal-detection
+	// timing analysis.
+	instancePollInterval = 5 * time.Second
+
+	// destroyShutdownBudget is the timeout used for "best-effort" Destroy
+	// calls during cancel/timeout/terminal exit paths. The parent ctx is
+	// already cancelled (or the caller is exiting), so we mint a fresh
+	// background ctx with this budget per Pitfall 8.
+	destroyShutdownBudget = 30 * time.Second
+
+	// healthCheckTimeout is the per-attempt HTTP timeout for the pod
+	// /health probe. Pod is on a public IP so DNS/TCP could fan out;
+	// we keep this small relative to the 5s poll cadence so a slow
+	// pod does not cascade-timeout the budget.
+	healthCheckTimeout = 4 * time.Second
+)
+
+// VastAPI is the subset of vast.Client methods provisionLifecycle calls.
+// Stubbed in unit tests; production wires the real *vast.Client.
+type VastAPI interface {
+	SearchOffers(ctx context.Context, filter vast.SearchFilter) ([]vast.Offer, error)
+	CreateInstance(ctx context.Context, offerID int64, req vast.CreateRequest) (vast.Instance, error)
+	GetInstance(ctx context.Context, instanceID int64) (vast.Instance, error)
+	DestroyInstance(ctx context.Context, instanceID int64) error
+}
+
+// HealthChecker is the pod /health probe interface. Stubbed in unit tests
+// (override via Reconciler.healthCheck) so tests can simulate a healthy
+// pod without spinning up a full HTTP server.
+type HealthChecker func(ctx context.Context, url string) bool
+
+// startProvisioning is the StateEmergencyProvisioning entry point. INSERTs
+// the lifecycle row, stores the activeLifecycle pointer, and spawns the
+// long-running provisionLifecycle goroutine. Returns immediately — the
+// goroutine completes asynchronously (eventually flipping the FSM via
+// markHealthy or closing it via one of the failure paths).
+//
+// MUST only be called by the leader (caller responsibility — typically
+// from inside evaluateEmergencyProvisioning which already holds
+// IsLeader()==true). Multiple concurrent calls are guarded by the
+// activeLifecycle pointer + the partial unique DB index.
+func (r *Reconciler) startProvisioning(parentCtx context.Context) {
+	if r.q == nil {
+		r.deps.Log.Error("startProvisioning: no DB pool wired (test misconfiguration)")
+		return
+	}
+	if existing := r.activeLifecycle.Load(); existing != nil {
+		// Defensive: should never happen because evaluateEmergencyProvisioning
+		// gates on activeLifecycle==nil. Log and bail rather than spawn a
+		// duplicate goroutine.
+		r.deps.Log.Warn("startProvisioning called with active lifecycle; skipping",
+			"existing_id", existing.ID)
+		return
+	}
+
+	id, err := r.q.InsertEmergencyLifecycle(parentCtx, gen.InsertEmergencyLifecycleParams{
+		TriggerReason: "failed_over_sustained",
+		LeaderReplica: pgtype.Text{String: r.replicaID, Valid: true},
+	})
+	if err != nil {
+		r.deps.Log.Error("startProvisioning: InsertEmergencyLifecycle failed", "err", err)
+		return
+	}
+	r.activeLifecycle.Store(&ActiveLifecycle{
+		ID:          id,
+		StartedUnix: time.Now().Unix(),
+	})
+
+	ctx, cancel := context.WithCancel(parentCtx)
+	r.lifecycleCancel.Store(&cancel)
+
+	go func() {
+		defer cancel()
+		start := time.Now()
+		err := r.provisionLifecycle(ctx, id)
+		obs.GatewayEmergencyProvisionDurationSeconds.Observe(time.Since(start).Seconds())
+		if err != nil {
+			r.deps.Log.Error("provisionLifecycle returned error",
+				"lifecycle_id", id, "err", err)
+			// Plan 07 will refine this — for Plan 06 we transition back to
+			// HEALTHY so a future trigger can fire. activeLifecycle is
+			// already cleared by closeLifecycle (or by the cancel paths).
+			r.deps.FSM.Transition(StateEmergencyProvisioning, StateHealthy,
+				time.Now(), "provision_error:"+errReason(err))
+		}
+	}()
+}
+
+// errReason returns a stable short token suitable for logging / breadcrumb.
+func errReason(err error) string {
+	switch {
+	case errors.Is(err, ErrOfferRaceLost):
+		return "offer_race_lost"
+	case errors.Is(err, ErrHealthTimeout):
+		return "health_timeout"
+	case errors.Is(err, ErrInstanceTerminal):
+		return "instance_terminal_state"
+	case errors.Is(err, ErrNoOffersBelowCap):
+		return "no_offers_below_cap"
+	case errors.Is(err, context.Canceled):
+		return "cancelled_in_flight"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	}
+	return "other"
+}
+
+// provisionLifecycle implements the SearchOffers → CreateInstance (with
+// 3-attempt bid race retry) → waitForReadyOrDestroy flow. Returns nil on
+// success (FSM is in StateEmergencyActive, lifecycle row has
+// first_health_pass_at populated). On error, the lifecycle row has been
+// closed (or will be closed) with the appropriate shutdown_reason.
+func (r *Reconciler) provisionLifecycle(ctx context.Context, id int64) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	vastClient := r.vastAPI()
+	if vastClient == nil {
+		_ = r.closeLifecycle(ctx, id, "no_vast_client", 0)
+		return errors.New("emerg: no Vast.ai client wired (VAST_AI_API_KEY missing)")
+	}
+
+	filter := vast.DefaultSearchFilter(r.deps.Cfg.VastPriceCapDPH, r.deps.Cfg.PrimaryHostID)
+	offers, err := vastClient.SearchOffers(ctx, filter)
+	if err != nil {
+		_ = r.closeLifecycle(ctx, id, "search_failed", 0)
+		return err
+	}
+
+	// Pitfall 5 — epsilon comparison `cap + 0.0001`. Defense in depth on
+	// top of the server-side dph_total filter.
+	pickable := filterBelowCap(offers, r.deps.Cfg.VastPriceCapDPH)
+	if len(pickable) == 0 {
+		r.deps.Log.Info("provisionLifecycle: no offers below cap",
+			"cap", r.deps.Cfg.VastPriceCapDPH, "raw_offer_count", len(offers))
+		_ = r.closeLifecycle(ctx, id, "no_offers_below_cap", 0)
+		return ErrNoOffersBelowCap
+	}
+
+	// D-A3 — 3 attempts with 2s/4s/8s exponential backoff between
+	// re-searches. Bid race window seconds (Pitfall 6).
+	for attempt := 0; attempt < 3; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		offer := pickable[0]
+		req := r.buildCreateRequest(offer, id)
+		instance, createErr := vastClient.CreateInstance(ctx, offer.ID, req)
+		if createErr == nil {
+			// SUCCESS — record vast IDs + offer_accepted event in ONE UPDATE
+			// (D-D3: events JSONB written FIRST per W7 revision 2026-05-13).
+			eventJSON := mustEventJSON("offer_accepted", map[string]any{
+				"offer_id":     offer.ID,
+				"instance_id":  instance.ID,
+				"dph":          offer.DphTotal,
+				"host_id":      offer.HostID,
+				"machine_id":   offer.MachineID,
+				"geolocation":  offer.Geolocation,
+				"attempt":      attempt + 1,
+			})
+			if err := r.q.UpdateEmergencyLifecycleVastIDs(ctx, gen.UpdateEmergencyLifecycleVastIDsParams{
+				ID:             id,
+				VastOfferID:    pgInt8(offer.ID),
+				VastInstanceID: pgInt8(instance.ID),
+				AcceptedDph:    pgNumericFromFloat(offer.DphTotal),
+				EventJson:      eventJSON,
+			}); err != nil {
+				// Audit failure — destroy instance + close lifecycle
+				// rather than leak a Vast pod whose DB row was never updated.
+				r.bestEffortDestroy(instance.ID)
+				_ = r.closeLifecycle(ctx, id, "audit_write_failed", 0)
+				return err
+			}
+			// Update activeLifecycle snapshot with the instance ID.
+			r.activeLifecycle.Store(&ActiveLifecycle{
+				ID:             id,
+				VastInstanceID: instance.ID,
+				StartedUnix:    time.Now().Unix(),
+			})
+			r.captureBreadcrumb("offer_accepted", map[string]any{
+				"lifecycle_id": id, "offer_id": offer.ID,
+				"instance_id": instance.ID, "dph": offer.DphTotal,
+			})
+			obs.GatewayEmergencyCostDPH.WithLabelValues(strconv.FormatInt(id, 10)).Set(offer.DphTotal)
+			return r.waitForReadyOrDestroy(ctx, id, instance.ID, offer.DphTotal)
+		}
+
+		if !errors.Is(createErr, vast.ErrOfferGone) {
+			// Hard error — abort lifecycle.
+			_ = r.closeLifecycle(ctx, id, "create_error", 0)
+			return createErr
+		}
+
+		// Bid race lost — back off and re-search.
+		r.captureBreadcrumb("offer_race_attempt", map[string]any{
+			"lifecycle_id": id, "attempt": attempt + 1, "offer_id": offer.ID,
+		})
+		select {
+		case <-ctx.Done():
+			_ = r.closeLifecycle(ctx, id, "cancelled_in_flight", 0)
+			return ctx.Err()
+		case <-time.After(time.Duration(1<<attempt) * 2 * time.Second):
+		}
+		offers, err = vastClient.SearchOffers(ctx, filter)
+		if err != nil {
+			_ = r.closeLifecycle(ctx, id, "search_failed", 0)
+			return err
+		}
+		pickable = filterBelowCap(offers, r.deps.Cfg.VastPriceCapDPH)
+		if len(pickable) == 0 {
+			_ = r.closeLifecycle(ctx, id, "no_offers_below_cap", 0)
+			return ErrNoOffersBelowCap
+		}
+	}
+
+	// 3 race losses — terminal abort.
+	r.captureTerminalSentry(id, "offer_race_lost", map[string]any{"attempts": 3})
+	_ = r.closeLifecycle(ctx, id, "offer_race_lost", 0)
+	return ErrOfferRaceLost
+}
+
+// waitForReadyOrDestroy polls GetInstance every `instancePollInterval`
+// until either the pod is healthy (return nil) OR a terminal exit path
+// fires (return the appropriate sentinel error).
+//
+// Pitfall 9 (terminal states): exited / unknown / offline → destroy +
+// close. Pitfall 1: actual_status==running ALONE is not enough — we
+// also require public_ipaddr!="" + populated Ports + /health 200.
+// Pitfall 6 (W6 fix): empty PublicIPAddr or empty Ports map means the
+// container has not exposed its mapped port yet — keep polling, do NOT
+// charge the pod cold-start budget for transient HTTP errors.
+func (r *Reconciler) waitForReadyOrDestroy(ctx context.Context, lifecycleID, instanceID int64, acceptedDPH float64) error {
+	poll := time.NewTicker(instancePollInterval)
+	defer poll.Stop()
+	deadline := time.NewTimer(time.Duration(r.deps.Cfg.ProvisionColdStartBudgetSeconds) * time.Second)
+	defer deadline.Stop()
+	vastClient := r.vastAPI()
+
+	for {
+		select {
+		case <-ctx.Done():
+			r.bestEffortDestroy(instanceID)
+			_ = r.closeLifecycle(context.Background(), lifecycleID, "cancelled_in_flight", 0)
+			return ctx.Err()
+
+		case <-deadline.C:
+			r.bestEffortDestroy(instanceID)
+			_ = r.closeLifecycle(context.Background(), lifecycleID, "health_timeout", 0)
+			r.captureTerminalSentry(lifecycleID, "health_timeout", map[string]any{
+				"instance_id": instanceID,
+				"budget_s":    r.deps.Cfg.ProvisionColdStartBudgetSeconds,
+			})
+			return ErrHealthTimeout
+
+		case <-poll.C:
+			inst, err := vastClient.GetInstance(ctx, instanceID)
+			if err != nil {
+				if errors.Is(err, vast.ErrInstanceNotFound) {
+					// Vast destroyed the pod under us (host failure, spot
+					// underbid). Surface as terminal.
+					_ = r.closeLifecycle(context.Background(), lifecycleID, "instance_terminal_state", 0)
+					return ErrInstanceTerminal
+				}
+				// Transient error — keep polling. Do NOT advance budget
+				// state; the deadline timer is the source of truth.
+				continue
+			}
+			if inst.IsTerminal() {
+				r.bestEffortDestroy(instanceID)
+				_ = r.closeLifecycle(context.Background(), lifecycleID, "instance_terminal_state", 0)
+				r.captureTerminalSentry(lifecycleID, "instance_terminal_state", map[string]any{
+					"instance_id":   instanceID,
+					"actual_status": inst.ActualStatus,
+				})
+				return ErrInstanceTerminal
+			}
+			if inst.ActualStatus != "running" {
+				// Still loading / scheduling — keep polling.
+				continue
+			}
+			// W6 fix — public_ipaddr OR ports may be empty briefly even
+			// after actual_status flips to running. Treat as not-yet-ready.
+			healthURL := r.podHealthURL(inst)
+			if healthURL == "" {
+				continue
+			}
+			// Pitfall 1 — verify the pod actually serves /health.
+			if !r.checkHealth(ctx, healthURL) {
+				continue
+			}
+			// HEALTHY!
+			if err := r.markHealthy(ctx, lifecycleID, healthURL, acceptedDPH); err != nil {
+				r.deps.Log.Error("markHealthy failed; pod is healthy but DB write failed",
+					"lifecycle_id", lifecycleID, "err", err)
+				return err
+			}
+			return nil
+		}
+	}
+}
+
+// markHealthy is the success exit of waitForReadyOrDestroy. Updates the DB
+// row (first_health_pass_at = NOW()), flips the FSM to EmergencyActive,
+// and stores the active pod URL for the dispatcher (Plan 08 reads).
+func (r *Reconciler) markHealthy(ctx context.Context, lifecycleID int64, healthURL string, acceptedDPH float64) error {
+	eventJSON := mustEventJSON("health_pass", map[string]any{
+		"lifecycle_id": lifecycleID,
+		"health_url":   healthURL,
+		"dph":          acceptedDPH,
+	})
+	if err := r.q.MarkEmergencyLifecycleHealthy(ctx, gen.MarkEmergencyLifecycleHealthyParams{
+		ID:        lifecycleID,
+		EventJson: eventJSON,
+	}); err != nil {
+		return err
+	}
+	r.activePodURL.Store(&healthURL)
+	obs.GatewayEmergencyActivePod.WithLabelValues(healthURL).Set(1)
+	r.captureBreadcrumb("health_pass", map[string]any{
+		"lifecycle_id": lifecycleID, "health_url": healthURL,
+	})
+	r.deps.FSM.Transition(StateEmergencyProvisioning, StateEmergencyActive, time.Now(), "health_passed")
+	return nil
+}
+
+// closeLifecycle is the single point of contact for closing a lifecycle
+// row. Sets ended_at = NOW(), records shutdown_reason, calculates
+// total_cost_brl per D-D4, and clears the activeLifecycle pointer.
+//
+// `acceptedDPH` is 0 when no instance was ever created (pre-create
+// orphans, no_offers_below_cap, audit_write_failed); 0 cost is recorded.
+//
+// We use context.Background() for the DB write so a parent ctx
+// cancellation does not also fail the audit write.
+func (r *Reconciler) closeLifecycle(ctx context.Context, id int64, reason string, acceptedDPH float64) error {
+	cost := r.calculateCostBRL(ctx, id, acceptedDPH)
+	eventJSON := mustEventJSON("lifecycle_close", map[string]any{
+		"reason":         reason,
+		"total_cost_brl": cost,
+	})
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer dbCancel()
+	if err := r.q.CloseEmergencyLifecycle(dbCtx, gen.CloseEmergencyLifecycleParams{
+		ID:             id,
+		ShutdownReason: pgtype.Text{String: reason, Valid: true},
+		TotalCostBrl:   pgNumericFromFloat(cost),
+		EventJson:      eventJSON,
+	}); err != nil {
+		r.deps.Log.Error("closeLifecycle: CloseEmergencyLifecycle failed",
+			"id", id, "reason", reason, "err", err)
+		return err
+	}
+	r.activeLifecycle.Store(nil)
+	if cancelPtr := r.lifecycleCancel.Swap(nil); cancelPtr != nil {
+		// Cancel the context for any inner goroutines tied to this lifecycle.
+		(*cancelPtr)()
+	}
+	if podURLPtr := r.activePodURL.Swap(nil); podURLPtr != nil {
+		obs.GatewayEmergencyActivePod.WithLabelValues(*podURLPtr).Set(0)
+	}
+	obs.GatewayEmergencyLifecyclesTotal.WithLabelValues("failed_over_sustained", reason).Inc()
+	return nil
+}
+
+// calculateCostBRL implements D-D4: total_cost_brl = (DPH * hours_active)
+// * USD_TO_BRL_RATE, where hours_active = (NOW() - first_health_pass_at).
+// Returns 0 when first_health_pass_at IS NULL (cold-start failed before
+// /health passed — Vast still bills, but our audit log only counts
+// "useful" hours per D-D4).
+func (r *Reconciler) calculateCostBRL(ctx context.Context, id int64, acceptedDPH float64) float64 {
+	if acceptedDPH <= 0 {
+		return 0
+	}
+	// Query first_health_pass_at; if NULL → 0 hours_active.
+	var firstHealth pgtype.Timestamptz
+	row := r.deps.DB.QueryRow(ctx, `SELECT first_health_pass_at FROM ai_gateway.emergency_lifecycles WHERE id = $1`, id)
+	if err := row.Scan(&firstHealth); err != nil {
+		r.deps.Log.Warn("calculateCostBRL: query first_health_pass_at failed",
+			"id", id, "err", err)
+		return 0
+	}
+	if !firstHealth.Valid {
+		return 0
+	}
+	hours := time.Since(firstHealth.Time).Hours()
+	if hours < 0 {
+		hours = 0
+	}
+	return acceptedDPH * hours * r.deps.Cfg.USDToBRLRate
+}
+
+// podHealthURL formats the /health URL from a vast.Instance using the
+// spike-derived field path (instances.ports["9100/tcp"][0].HostPort).
+//
+// Returns "" when the instance is not yet ready to serve traffic — the
+// caller (waitForReadyOrDestroy) treats empty as "keep polling" rather
+// than as an error (W6 fix).
+func (r *Reconciler) podHealthURL(inst vast.Instance) string {
+	if inst.PublicIPAddr == "" {
+		return ""
+	}
+	bindings, ok := inst.Ports["9100/tcp"]
+	if !ok || len(bindings) == 0 {
+		return ""
+	}
+	port := bindings[0].HostPort
+	if port == "" {
+		return ""
+	}
+	return "http://" + inst.PublicIPAddr + ":" + port + "/health"
+}
+
+// checkHealth issues a single GET against the pod /health endpoint. Returns
+// true only when HTTP 200 + body.status == "healthy" + body.services.llm.status == "healthy".
+//
+// Tests can override via Reconciler.healthCheckOverride to short-circuit
+// the HTTP path. Production always returns the default checker.
+func (r *Reconciler) checkHealth(ctx context.Context, url string) bool {
+	if r.healthCheckOverride != nil {
+		return r.healthCheckOverride(ctx, url)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{Timeout: healthCheckTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var body struct {
+		Status   string `json:"status"`
+		Services struct {
+			LLM struct {
+				Status string `json:"status"`
+			} `json:"llm"`
+		} `json:"services"`
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return false
+	}
+	return body.Status == "healthy" && body.Services.LLM.Status == "healthy"
+}
+
+// vastAPI returns the configured VastAPI client. Unit tests override via
+// Reconciler.vastOverride; production reads from r.deps.Vast (set by
+// NewReconciler when Cfg.VastAIAPIKey is non-empty).
+func (r *Reconciler) vastAPI() VastAPI {
+	if r.vastOverride != nil {
+		return r.vastOverride
+	}
+	return r.deps.Vast
+}
+
+// bestEffortDestroy issues DestroyInstance with a fresh background context
+// + 30s budget. Errors are logged and swallowed — caller is already on a
+// failure path and the orphan cleanup goroutine (Plan 07) will reconcile
+// any leaks.
+func (r *Reconciler) bestEffortDestroy(instanceID int64) {
+	if instanceID == 0 {
+		return
+	}
+	vastClient := r.vastAPI()
+	if vastClient == nil {
+		return
+	}
+	destroyCtx, cancel := context.WithTimeout(context.Background(), destroyShutdownBudget)
+	defer cancel()
+	if err := vastClient.DestroyInstance(destroyCtx, instanceID); err != nil {
+		r.deps.Log.Warn("bestEffortDestroy failed; orphan recovery will reconcile",
+			"instance_id", instanceID, "err", err)
+	}
+}
+
+// buildCreateRequest assembles the CreateRequest body for PUT /asks/{id}/.
+// The image tag comes from Cfg.EmergencyPodImageTag (default "v1.0").
+// The `Env` map encodes the Docker -p port mappings (Vast convention).
+// Onstart is a one-line bash sentinel — Plan 06 only verifies port
+// mapping discovery; the production onstart pulls weights from MinIO
+// (Phase 1 image already handles it).
+func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vast.CreateRequest {
+	return vast.CreateRequest{
+		ClientID: "me",
+		Image:    "ghcr.io/ifixtelecom/ifix-ai-pod:" + r.deps.Cfg.EmergencyPodImageTag,
+		Env: map[string]string{
+			// Vast.ai Docker port forwarding convention (per spike capture):
+			// keys are literal `-p HOST_PORT:CONTAINER_PORT` flag strings.
+			"-p 9100:9100": "1",
+			"-p 8000:8000": "1",
+			// Phase 1 onstart consumes these to pull weights.
+			"MINIO_ENDPOINT": "https://s3.ifixtelecom.com.br",
+			"MINIO_BUCKET":   "ai-gateway",
+		},
+		Onstart:     "/root/onstart.sh", // Phase 1 image bakes this script in
+		Runtype:     "ssh",
+		Disk:        50,
+		Label:       fmt.Sprintf("ifix-emerg-lifecycle-%d", lifecycleID),
+		TargetState: "running",
+	}
+}
+
+// filterBelowCap applies the Pitfall 5 epsilon comparison cap+0.0001 to
+// the offer list. Defense in depth on top of the server-side dph_total
+// filter (which can include hosts that priced at exactly cap+1e-6 due to
+// float rounding upstream).
+func filterBelowCap(offers []vast.Offer, cap float64) []vast.Offer {
+	out := make([]vast.Offer, 0, len(offers))
+	for _, o := range offers {
+		if o.DphTotal > cap+0.0001 {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// excludeHost removes any offer whose HostID matches the given host. Used
+// when the primary host is known to avoid bidding on the same physical
+// machine (D-A2 host_id != filter). Returns a fresh slice.
+func excludeHost(offers []vast.Offer, hostID int64) []vast.Offer {
+	if hostID <= 0 {
+		return offers
+	}
+	out := make([]vast.Offer, 0, len(offers))
+	for _, o := range offers {
+		if o.HostID == hostID {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// mustEventJSON marshals a single event row {ts, type, payload} for the
+// emergency_lifecycles.events JSONB column. Returns a length-1 JSON array
+// (the SQL `events || $::jsonb` operator requires the right side to be
+// JSONB-compatible — wrapping in [...] keeps the array-of-events shape).
+func mustEventJSON(eventType string, payload map[string]any) []byte {
+	row := map[string]any{
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		"type":    eventType,
+		"payload": payload,
+	}
+	arr := []map[string]any{row}
+	out, err := json.Marshal(arr)
+	if err != nil {
+		// json.Marshal on a map[string]any with primitive values cannot
+		// realistically fail; use a fallback rather than panic to keep
+		// the goroutine alive.
+		return []byte(`[{"type":"event_marshal_failed"}]`)
+	}
+	return out
+}
+
+// pgInt8 wraps an int64 as a non-null pgtype.Int8 (sqlc's BIGINT mapping).
+func pgInt8(v int64) pgtype.Int8 {
+	return pgtype.Int8{Int64: v, Valid: true}
+}
+
+// pgNumericFromFloat converts a float64 to pgtype.Numeric. Used for
+// accepted_dph (NUMERIC(6,4)) and total_cost_brl (NUMERIC(10,4)). Values
+// are rounded to 4 decimal places — matches the column scale.
+func pgNumericFromFloat(v float64) pgtype.Numeric {
+	if v == 0 {
+		return pgtype.Numeric{Int: big.NewInt(0), Exp: 0, Valid: true}
+	}
+	// Multiply by 10^4 to capture 4 decimal places, then truncate to int.
+	scaled := int64(v * 10000)
+	return pgtype.Numeric{Int: big.NewInt(scaled), Exp: -4, Valid: true}
+}
+
+// captureBreadcrumb adds a Sentry breadcrumb at the info level. Used for
+// non-terminal events (offer_accepted, instance_created, health_pass).
+// Per D-E4 — breadcrumbs ride along the next CaptureMessage so terminal
+// errors land in Sentry with the full lifecycle timeline attached.
+func (r *Reconciler) captureBreadcrumb(category string, data map[string]any) {
+	sentry.AddBreadcrumb(&sentry.Breadcrumb{
+		Category:  "emerg." + category,
+		Message:   category,
+		Level:     sentry.LevelInfo,
+		Timestamp: time.Now(),
+		Data:      data,
+	})
+}
+
+// captureTerminalSentry emits a Sentry CaptureMessage with WARNING level
+// + tags subsystem=emerg + lifecycle_id + shutdown_reason. Used for
+// terminal failure paths (offer_race_lost, health_timeout,
+// instance_terminal_state). Per D-E4.
+func (r *Reconciler) captureTerminalSentry(lifecycleID int64, reason string, extras map[string]any) {
+	hub := sentry.CurrentHub().Clone()
+	hub.Scope().SetTag("subsystem", "emerg")
+	hub.Scope().SetTag("lifecycle_id", strconv.FormatInt(lifecycleID, 10))
+	hub.Scope().SetTag("shutdown_reason", reason)
+	for k, v := range extras {
+		hub.Scope().SetExtra(k, v)
+	}
+	hub.CaptureMessage(fmt.Sprintf("emergency lifecycle aborted: %s", reason))
+}
+
+// vastOverride and healthCheckOverride exist as struct fields on Reconciler
+// (set via Plan 06-06 SetVastClient / SetHealthCheck test helpers below).
+// They are nil in production; non-nil only inside unit tests.
+
+// SetVastClient injects a custom VastAPI implementation. ONLY intended
+// for tests — production wires the real *vast.Client via Deps.Vast in
+// NewReconciler. Returns the receiver for fluent test setup.
+func (r *Reconciler) SetVastClient(api VastAPI) *Reconciler {
+	r.vastOverride = api
+	return r
+}
+
+// SetHealthCheck injects a custom health-check function. ONLY intended
+// for tests so the integration test can return true/false without spinning
+// up a full HTTP server. Returns the receiver for fluent test setup.
+func (r *Reconciler) SetHealthCheck(fn HealthChecker) *Reconciler {
+	r.healthCheckOverride = fn
+	return r
+}
+
+// ActivePodURL returns the current emergency pod /health URL when one
+// is live + healthy, plus a bool indicating whether the pointer was set.
+// Plan 08 dispatcher reads this every request; lockless atomic.Load makes
+// it safe on the hot path.
+func (r *Reconciler) ActivePodURL() (string, bool) {
+	p := r.activePodURL.Load()
+	if p == nil {
+		return "", false
+	}
+	return *p, true
+}
+
+// IsActive returns true when the FSM is in EmergencyActive AND ActivePodURL
+// is set. The dispatcher (Plan 08) uses this as the pre-condition for
+// overriding tier-0 routing. Lockless.
+func (r *Reconciler) IsActive() bool {
+	if r.deps.FSM.State() != StateEmergencyActive {
+		return false
+	}
+	_, ok := r.ActivePodURL()
+	return ok
+}
+
