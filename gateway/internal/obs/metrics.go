@@ -373,5 +373,90 @@ var GatewayDcgmScrapeFailures = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Count of DCGM scrape failures. reason=http_error|status_<n>|parse_error|metric_missing|metric_not_gauge|sanity_check.",
 }, []string{"reason"})
 
+// ============================================================================
+// Phase 6 — Emergency-pod auto-provisioning (Vast.ai). CONTEXT.md D-E2.
+// Cardinality budget (matches budget OBS-02 ceiling 10k series; consumed in
+// Phase 7 dashboard):
+//   - GatewayEmergencyState: 7 FSM states (BLOCKER 3 revision reduced
+//     from 9 to 7; OFF_HOURS + MAINTENANCE deferred)
+//   - GatewayEmergencyLifecyclesTotal: ~22 series (2 trigger_reason ×
+//     11 shutdown_reason)
+//   - GatewayEmergencyActivePod: 1 active pod_url at most
+//   - GatewayEmergencyCostDPH: 1 series per *live* lifecycle (PRV-05
+//     guarantees ≤1; cleared on cutback)
+//   - GatewayVastAPIRequestsTotal: ~50 series (5 op × ~10 status)
+//   Total Phase 6 baseline: ~80 series.
+// ============================================================================
+
+// GatewayEmergencyState is the current emergency FSM state. Caller sets
+// 1 for the live state, 0 for the others (D-E2). Label values:
+// "healthy" | "degraded" | "failed_over" | "emergency_provisioning" |
+// "emergency_active" | "recovering" | "cooldown" (7-state FSM).
+var GatewayEmergencyState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "gateway_emergency_state",
+	Help: "Current emergency FSM state. 1 for active, 0 for others.",
+}, []string{"state"})
+
+// GatewayEmergencyLifecyclesTotal counts emergency lifecycles by trigger
+// and shutdown reason. trigger_reason ∈ {failed_over_sustained, manual_force}
+// × shutdown_reason ∈ {cutback_idle, cancelled_in_flight, health_timeout,
+// offer_race_lost, manual, budget_exceeded, instance_terminal_state,
+// leader_recovery_zombie, leader_recovery_lost, leader_recovery_pre_create,
+// no_offers_below_cap}.
+var GatewayEmergencyLifecyclesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "gateway_emergency_lifecycles_total",
+	Help: "Count of emergency lifecycles by trigger and shutdown reason.",
+}, []string{"trigger_reason", "shutdown_reason"})
+
+// GatewayEmergencyActivePod is 1 when an emergency pod is live serving
+// traffic (FSM state EMERGENCY_ACTIVE), 0 otherwise. The pod_url label
+// rotates per lifecycle (Vast.ai assigns a new ip:port each create).
+// PRV-05 guarantees only one live series at a time.
+var GatewayEmergencyActivePod = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "gateway_emergency_active_pod",
+	Help: "1 when emergency pod is live serving traffic; 0 otherwise.",
+}, []string{"pod_url"})
+
+// GatewayEmergencyProvisionDurationSeconds is the elapsed time from the
+// first search_offers call to the first /health pass for emergency pod
+// provisions. Buckets cover 30s (best case Vast.ai already-warm host)
+// through 900s (15 min — well past the 10 min cold-start budget;
+// outliers indicate MinIO/inet weight pull degraded).
+var GatewayEmergencyProvisionDurationSeconds = promauto.NewHistogram(prometheus.HistogramOpts{
+	Name:    "gateway_emergency_provision_duration_seconds",
+	Help:    "Time from search to /health pass for emergency pod provisions.",
+	Buckets: []float64{30, 60, 120, 300, 600, 900},
+})
+
+// GatewayEmergencyCostDPH is the current emergency pod USD-per-hour cost
+// for the live lifecycle. lifecycle_id is high-cardinality but bounded
+// to 1 live series at any time (PRV-05); operators may drop closed
+// lifecycle_ids in scrape config if accumulated cardinality grows.
+var GatewayEmergencyCostDPH = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "gateway_emergency_cost_dph",
+	Help: "Current emergency pod USD per hour cost.",
+}, []string{"lifecycle_id"})
+
+// GatewayEmergencyMonthCostBRL is the running monthly aggregate cost in
+// BRL of *closed* emergency lifecycles (sums total_cost_brl WHERE
+// started_at >= date_trunc('month', NOW()) AND ended_at IS NOT NULL).
+// Updated every 60s by the reconciler (D-D2). Compares against
+// MonthlyEmergencyBudgetBRL to fire the Sentry budget warning.
+var GatewayEmergencyMonthCostBRL = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "gateway_emergency_month_cost_brl",
+	Help: "Running monthly aggregate cost in BRL of closed lifecycles.",
+})
+
+// GatewayVastAPIRequestsTotal counts Vast.ai REST requests by operation
+// and HTTP status. op ∈ {search, create, get, destroy, ping}; status ∈
+// {started, transport_error, 200, 401, 403, 404, 409, 410, 422, 429,
+// 500, 502, 503, 504}. The "started" status is incremented before the
+// HTTP call so operators can see in-flight requests vs completions
+// (transport_error covers ctx cancellation + DNS/connect failures).
+var GatewayVastAPIRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "gateway_vast_api_requests_total",
+	Help: "Vast.ai REST requests by operation and HTTP status (or 'transport_error', 'started').",
+}, []string{"op", "status"})
+
 // Handler returns the /metrics endpoint handler.
 func Handler() http.Handler { return promhttp.Handler() }
