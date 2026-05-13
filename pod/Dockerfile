@@ -28,7 +28,7 @@ FROM ghcr.io/ggml-org/llama.cpp:server-cuda AS llama-bin
 # Stage 2: runtime — CUDA 12.4 runtime + curl/ca-certs for weight download
 #                    and health probes. No Python, no pip.
 # =========================================================================
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+FROM nvidia/cuda:12.9.1-cudnn-runtime-ubuntu24.04 AS runtime
 
 # Ifix convention: TZ + locale + minimal apt surface
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -52,6 +52,7 @@ COPY --from=llama-bin /app/llama-server /usr/local/bin/llama-server
 # Copy shared libs the llama-server binary needs (ggml runtimes, BLAS, etc.)
 COPY --from=llama-bin /app/libggml*.so /usr/local/lib/
 COPY --from=llama-bin /app/libllama*.so /usr/local/lib/
+COPY --from=llama-bin /app/libmtmd*.so /usr/local/lib/
 RUN ldconfig
 
 # Bundle the patched Jinja template into the image (from plan 02)
