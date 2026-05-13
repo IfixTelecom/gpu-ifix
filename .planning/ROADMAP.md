@@ -141,7 +141,7 @@ Plans:
   5. A Vast.ai offer priced above the configured cap ($0.40/h) is never accepted; each lifecycle emits a full audit record (trigger, offer accepted, duration, total cost, shutdown reason).
 **Plans:** 11 plans
 Plans:
-- [ ] 06-01-PLAN.md — Wave 0 scaffolding: redsync v4 + sentinel errors emerg/vast + namespace mirror + 11 env vars config + 7 obs collectors emergency_* + operator gates (price cap, budget, BRL rate) (PRV-01, PRV-02, PRV-05)
+- [x] 06-01-PLAN.md — Wave 0 scaffolding: redsync v4 + sentinel errors emerg/vast + namespace mirror + 11 env vars config + 7 obs collectors emergency_* + operator gates (price cap, budget, BRL rate) (PRV-01, PRV-02, PRV-05)
 - [ ] 06-02-PLAN.md — DB foundation: migration 0019_emergency_lifecycles.sql (11 cols + 4 indexes + first_health_pass_at + partial unique singleton) + 7 sqlc queries + 2 integration tests (singleton + migration) (PRV-05, PRV-10)
 - [ ] 06-03-PLAN.md — emerg/fsm.go (9-state atomic + transition CAS + onChange + sentry breadcrumb) + redisx/emerg.go (Hash + Pub/Sub + redsync factory) + unit tests (PRV-02)
 - [ ] 06-04-PLAN.md — Reconciler Run loop + leader election via redsync (Pitfall 4 Extend quorum case + Pitfall 8 separate Unlock ctx) + integration test 2-replicas-1-leader (PRV-03, SC-2)
