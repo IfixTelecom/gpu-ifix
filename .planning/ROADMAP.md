@@ -139,16 +139,19 @@ Plans:
   3. If the primary recovers while provisioning is in flight, the emergency pod creation is cancelled/destroyed before it starts serving traffic (cancel-in-flight).
   4. Once primary is healthy for 5 minutes, traffic cuts back to primary; after an additional 5-minute idle grace period, the emergency pod is destroyed automatically.
   5. A Vast.ai offer priced above the configured cap ($0.40/h) is never accepted; each lifecycle emits a full audit record (trigger, offer accepted, duration, total cost, shutdown reason).
-**Plans:** 8 plans
+**Plans:** 11 plans
 Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [x] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [x] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [x] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [x] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [ ] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [ ] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+- [ ] 06-01-PLAN.md — Wave 0 scaffolding: redsync v4 + sentinel errors emerg/vast + namespace mirror + 11 env vars config + 7 obs collectors emergency_* + operator gates (price cap, budget, BRL rate) (PRV-01, PRV-02, PRV-05)
+- [ ] 06-02-PLAN.md — DB foundation: migration 0019_emergency_lifecycles.sql (11 cols + 4 indexes + first_health_pass_at + partial unique singleton) + 7 sqlc queries + 2 integration tests (singleton + migration) (PRV-05, PRV-10)
+- [ ] 06-03-PLAN.md — emerg/fsm.go (9-state atomic + transition CAS + onChange + sentry breadcrumb) + redisx/emerg.go (Hash + Pub/Sub + redsync factory) + unit tests (PRV-02)
+- [ ] 06-04-PLAN.md — Reconciler Run loop + leader election via redsync (Pitfall 4 Extend quorum case + Pitfall 8 separate Unlock ctx) + integration test 2-replicas-1-leader (PRV-03, SC-2)
+- [ ] 06-05-PLAN.md — Subscribe gw:breaker:events + localLlmTracker (openSince + sustained timer) + evaluateHealthy trigger Healthy→FailedOver→EmergencyProvisioning + 3 integration tests (sustained, transient, no-spawn-if-live) (PRV-04, SC-1)
+- [ ] 06-06-PLAN.md — Vast spike port discovery + vast/client.go (5 ops + parseErrorBody + T-6-01 enforced) + lifecycle.go (provisionLifecycle search→create→/health + bid race retry 3x + Pitfalls 1+5+9 enforced) + 3 integration tests (happy + price cap + bid race lost) (PRV-01, PRV-05, PRV-06, PRV-07, SC-1, SC-5)
+- [ ] 06-07-PLAN.md — cancelActiveLifecycle (3 layers: ctx + Pub/Sub + post-create destroy) + recovery.go (D-D5 3 cenários: pre-create orphan + lost + zombie) + 3 integration tests (cancel pre-create + cancel post-create + leader recovery zombie) (PRV-09, SC-3)
+- [ ] 06-08-PLAN.md — upstreams.Loader OverrideTier0/RestoreTier0 (atomic.Pointer LLM-only) + dispatcher RegisterTraffic hook + evaluateActive/Recovering/Cooldown (cutback + idle destroy + multi-failover ride-out) + 3 integration tests (cutback + idle destroy + ride-out) (PRV-08, SC-4)
+- [ ] 06-09-PLAN.md — budget.go (checkBudget + dedupe Pitfall 11 CORRECT + Sentry warning) + 60s tick wrapper + 2 integration tests (budget alert + audit completeness 11 fields) (PRV-05, PRV-10)
+- [ ] 06-10-PLAN.md — gatewayctl emerg state|force-provision|force-destroy|lifecycles + main.go wiring (NewReconciler + 2 goroutines + Vast.Ping at boot) (PRV-08, PRV-10)
+- [ ] 06-11-PLAN.md — HUMAN-UAT: 6 cenários LIVE Vast.ai (force-provision, budget tally, force-destroy, Sentry, budget alert, cancel-in-flight) + RUNBOOK-EMERGENCY-POD.md (PRV-01..10, SC-1..5)
 **Research hint:** yes (Vast.ai REST API quirks — SSH/onstart/port exposure/bid acceptance timing; 3h timeboxed spike before commit)
 **UI hint:** no
 
@@ -255,7 +258,7 @@ Plans:
 | 3. Resilience & Fallback Chain | 0/? | Not started | - |
 | 4. Multi-tenant Quotas, Billing & Schedule Routing | 0/? | Not started | - |
 | 5. Load Shedding | 0/? | Not started | - |
-| 6. Auto-provisioning Emergency Pod | 0/? | Not started | - |
+| 6. Auto-provisioning Emergency Pod | 0/11 | Plans created | - |
 | 7. Observability — Dashboard & Alerting | 0/? | Not started | - |
 | 8. Client Integration — ConverseAI + Chat Ifix | 0/? | Not started | - |
 | 9. Client Integration — Sensitive Tenants | 0/? | Not started | - |
@@ -285,3 +288,4 @@ Plans:
 
 *Roadmap created: 2026-04-17*
 *Phase 1 plans created: 2026-04-17*
+*Phase 6 plans created: 2026-05-13 (11 plans)*

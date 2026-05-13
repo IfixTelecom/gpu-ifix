@@ -1443,21 +1443,36 @@ func (b *budgetAlertDedupe) shouldEmit() bool {
 
 **OPEN QUESTION FOR PLANNER:** Add `first_health_pass_at TIMESTAMPTZ` column to migration 0019 OR derive from JSONB events.
 
-## Open Questions for Planner
+## Open Questions for Planner (RESOLVED 2026-05-13)
+
+All questions below were answered during planning. Inline `**RESOLVED:**` markers cite the plan/decision/spike that closed each item. Items still requiring runtime/spike-time judgement are marked `**RESOLVED:** Deferred to execution phase` with rationale.
 
 1. **Vast port mapping discovery (Pitfall 2):** What's the exact JSON path in `GET /instances/{id}/` response for the public port mapped to container 9100? Spike to confirm. Fallback: SSH proxy.
+   **RESOLVED:** Plan 06-06 Task 1 SPIKE (gate task, blocking) executes a $0.10–0.30 spike against Vast.ai LIVE; outcome documented in `06-SPIKE-vast-port-mapping.md` (artifact required by Plan 06-06). Implementation in `vast/types.go` + `lifecycle.go podHealthURL()` follows spike decision (a/b/c).
 2. **HTTP retry policy values for vast.Client:** Beyond 3-attempt bid race, should transient 5xx errors retry? Recommend: 2 retries with 1s/3s backoff for 5xx, single attempt for 4xx (except 429 which gets 5s backoff).
+   **RESOLVED:** Deferred to execution phase — `vast.Client` author (Plan 06-06 Task 2) implements the recommended policy via `cenkalti/backoff/v5` (already in go.mod). Rationale: policy is implementation detail; CONTEXT D-A1 only mandates 30s HTTP timeout; tunables intentionally left to code-time judgement.
 3. **Migration number:** Confirm `0019_emergency_lifecycles.sql` (NOT 0017 as CONTEXT D-B4 says — Phase 5 already used 0017+0018).
+   **RESOLVED:** Plan 06-02 migration is `0019_emergency_lifecycles.sql`. CONTEXT D-B4 mention of "0017" is superseded by RESEARCH evidence (Phase 5 consumed 0017+0018). All plans (02, 03, 06, 07, 08, 11) reference migration 0019.
 4. **first_health_pass_at column (Pitfall 15):** Add explicit column to schema OR derive from JSONB? Recommend: explicit column.
+   **RESOLVED:** Explicit `first_health_pass_at TIMESTAMPTZ` column added to migration 0019 (see DDL block at RESEARCH lines 1572-1592 + COMMENT line 1611-1612). D-D4 cost calc uses this column directly. Plan 06-02 generates `MarkEmergencyLifecycleHealthy` sqlc query that updates this column.
 5. **Port discovery strategy:** Spike outcome — option (a) parse Vast response field, (b) SSH proxy via vast.SSHExec, (c) image self-registration. Recommend (a) with (b) fallback.
+   **RESOLVED:** Plan 06-06 Task 1 SPIKE selects strategy at execution time (operator + Claude jointly). Default recommendation = (a) with (b) fallback per RESEARCH; final decision recorded in `06-SPIKE-vast-port-mapping.md` artifact.
 6. **SSH client library:** If using SSH proxy fallback — `golang.org/x/crypto/ssh` (stdlib-adjacent) is the standard. Will need to add as direct dep.
+   **RESOLVED:** Deferred to execution phase — only added if Plan 06-06 Task 1 spike selects strategy (b). If selected, executor adds `golang.org/x/crypto/ssh` to go.mod via `go get` during Plan 06-06 Task 2 implementation.
 7. **Reconciler shutdown ordering:** Order matters for `main.go` graceful shutdown — (1) stop accepting new HTTP requests, (2) cancel reconciler ctx, (3) wait for active lifecycle goroutine to honor ctx (or 60s timeout), (4) release redsync lock, (5) close DB pool. Document in plan.
+   **RESOLVED:** Plan 06-04 Run() loop already implements step (4) (Pitfall 8 separate releaseCtx for UnlockContext). Plan 06-10 Task 2 main.go wiring inherits the existing gateway shutdown order from Phase 2 (HTTP server first, then ctx cancel). Active lifecycle wait is delegated to ctx propagation (Plans 06+07 ensure ctx checks at every checkpoint).
 8. **gatewayctl `emerg lifecycles` output format:** JSON-by-default vs tabwriter table? Recommend: tabwriter default with `--json` flag (matches Phase 4 `gatewayctl usage report`).
+   **RESOLVED:** Plan 06-10 Task 1 implements `--format=table|json` flag, default `table` (tabwriter), per recommendation. Matches Phase 4 `gatewayctl usage report` ergonomic.
 9. **Sentry sampling rate:** Phase 6 emits ~10 breadcrumbs per lifecycle. Sentry cost-per-event matters at scale. Recommend: breadcrumbs only (zero cost — attached to next CaptureMessage); CaptureMessage only on terminal errors (4-6 per failed lifecycle).
+   **RESOLVED:** Pattern adopted across Plans 06-03 (FSM transition breadcrumbs only), 06-06/07/09 (CaptureMessage only on terminal errors via `captureTerminalSentry` helper per 06-PATTERNS.md "Padrão B"). Per D-E4.
 10. **Reconciler `evaluateTick` mega-function:** 9-state FSM with timer-based + signal-based transitions has risk of becoming a 200-line switch. Recommend: 1 method per state — `evaluateHealthy(now)`, `evaluateDegraded(now)`, etc. Keeps each method short + testable.
+    **RESOLVED:** Adopted per recommendation. Plans 06-05 (`evaluateHealthy`), 06-06 (case `StateEmergencyProvisioning` calls `startProvisioning`), 06-07 (cancel paths in respective evaluators), 06-08 (`evaluateEmergencyActive`, `evaluateRecovering`, `evaluateCooldown`) each define one method per state. After BLOCKER 3 resolution (drop OFF_HOURS + MAINTENANCE), reconciler covers 7 states with one method each.
 11. **`onstart.sh` modification needed?** Phase 1 onstart pulls weights and starts services. Phase 6 emergency pod uses **same image + same onstart**. No modification needed — confirmed by reading pod/onstart.sh.
+    **RESOLVED:** No modification. Phase 6 reuses `ghcr.io/ifixtelecom/ifix-ai-pod:v1.0` image + onstart untouched per CONTEXT specifics + D-domain item 7.
 12. **VAST_API_QPS_LIMIT default:** No documented Vast rate limit. Recommend: 1 req/s sustained, 10 req burst. Configurable via env.
+    **RESOLVED:** Static 1 req/s default in Plan 06-01 Task 1 env (`VAST_API_QPS_LIMIT=1`, operator-tunable via Portainer). Token bucket implementation in `vast.Client` is Claude's discretion per CONTEXT (last bullet of `### Claude's Discretion`).
 13. **Image tag pinning:** CONTEXT specifics says `EMERGENCY_POD_IMAGE_TAG=v1.0` env override. Confirm: `:v1.0` exists in `ghcr.io/ifixtelecom/ifix-ai-pod` (Phase 1 publishes `:v1.0` AND `:latest`).
+    **RESOLVED:** Confirmed in CONTEXT specifics ("Phase 1 publica `:v1.0` AND `:latest`"). Plan 06-01 Task 3 (operator gate) re-confirms via 06-WAVE0-GATES.md item 4 (operator can override tag if Phase 1 publishes newer pinned tag).
 
 ## Environment Availability
 

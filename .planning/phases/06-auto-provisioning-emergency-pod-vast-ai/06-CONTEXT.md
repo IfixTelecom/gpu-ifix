@@ -8,7 +8,7 @@
 
 Estende o gateway com um **reconciler de pod emergencial** que detecta quando o primário Vast.ai (`local-llm`) está fora por minutos e automaticamente provisiona, gerencia, e tear-down de um pod Vast.ai substituto — preservando o contrato OpenAI-compat das apps cliente sem ação humana e sem runaway de custo:
 
-1. **State machine 9-estado** (PRV-02) — `HEALTHY → DEGRADED → FAILED_OVER → EMERGENCY_PROVISIONING → EMERGENCY_ACTIVE → RECOVERING → COOLDOWN → OFF_HOURS → MAINTENANCE`. In-process autoritativo + mirror Redis (`gw:emerg:state` Hash) + Pub/Sub (`gw:emerg:events`) — mesmo pattern do breaker Fase 3 D-D1 e do shedding Fase 5 D-C3. Tick FSM 1s.
+1. **State machine 7-estado** (PRV-02) — `HEALTHY → DEGRADED → FAILED_OVER → EMERGENCY_PROVISIONING → EMERGENCY_ACTIVE → RECOVERING → COOLDOWN`. *(Originalmente especificado como 9-estado incluindo OFF_HOURS + MAINTENANCE; reduzido para 7-estado em revisão BLOCKER 3 — ver `<deferred>`. Os 2 estados removidos não tinham triggers/transitions definidos em D-XX e exigiriam dependência nova do schedule middleware Phase 4.)*. In-process autoritativo + mirror Redis (`gw:emerg:state` Hash) + Pub/Sub (`gw:emerg:events`) — mesmo pattern do breaker Fase 3 D-D1 e do shedding Fase 5 D-C3. Tick FSM 1s.
 2. **Leader-election via `go-redsync/redsync` distributed lock** (PRV-03) — `gw:emerg:lock`, TTL 30s, renew 10s. Apenas o leader avança o FSM, dispara provisioning ou destroy. Réplica não-leader observa estado via Pub/Sub e responde HTTP normalmente (proxying para upstreams seleccionados pelo dispatcher).
 3. **Trigger por sustentação de FAILED_OVER** (PRV-04, SC-1) — quando `local-llm` breaker.OPEN persistir por `PROVISION_TRIGGER_FAILED_OVER_SECONDS` (default 120s, env-tunable), leader transita FSM para `EMERGENCY_PROVISIONING` e dispara fluxo Vast.ai. Sinal: breaker do `local-llm` (LLM é o anchor SLA — chat = workload crítico), não composição com STT/embed (over-trigger) nem com sheddingFSM=ON (saturação ≠ falha por boundary Fase 5).
 4. **Vast.ai REST client em Go puro** (PRV-01) — sem Go SDK; chamadas diretas a `https://vast.ai/api/v0` com `Authorization: Bearer ${VAST_AI_API_KEY}`. Operações: `search_offers`, `create_instance` (`PUT /asks/{id}/`), `get_instance` (`GET /instances/{id}`), `destroy_instance` (`DELETE /instances/{id}`). Timeout HTTP **30s** (Vast lento sob load; 10s flaps, 60s desperdiça budget em chamadas mortas).
@@ -180,7 +180,7 @@ Estende o gateway com um **reconciler de pod emergencial** que detecta quando o 
 - **`gateway/internal/redis/`** (Phase 2) — Redis client wrapper, conexão pool já configurada
 - **`gateway/internal/breaker/`** (Phase 3) — gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber. Pattern de "in-process autoritativo + Redis mirror + Pub/Sub events" é o template direto para `internal/emerg/`
 - **`gateway/internal/upstreams/`** (Phase 3 D-D1, Phase 5 hot-reload) — loader pgxlisten + tipos para upstreams; Phase 6 estende com `OverrideTier0(name, url)` + `RestoreTier0(name)` métodos
-- **`gateway/internal/shed/`** (Phase 5) — FSM 4-estado + tick 1s goroutine + atomic state ops + RWMutex pattern. Pattern direto para `emerg/fsm.go` (FSM 9-estado)
+- **`gateway/internal/shed/`** (Phase 5) — FSM 4-estado + tick 1s goroutine + atomic state ops + RWMutex pattern. Pattern direto para `emerg/fsm.go` (FSM 7-estado — reduzido de 9 em revisão BLOCKER 3)
 - **`gateway/internal/obs/metrics.go`** — Prometheus registry + counter/gauge helpers já registrados (Phase 2 D-A4 baseline + Phase 3-5 extensions)
 - **`gateway/internal/db/`** + **`gateway/internal/db/queries/`** — sqlc generated queries pattern; Phase 6 adiciona queries novas para emergency_lifecycles
 - **`gateway/cmd/gatewayctl/`** — CLI binary, mesmo image que gateway server (D-08 Phase 2 distroless 27.7 MB compartilhado). Pattern de subcomandos extendido por Phase 3 D-G1 (`upstreams`), Phase 4 (`tenants`, `quotas`), Phase 5 (`shed-state`, `shed-force`, `thresholds`, `tenant set-shed-limits`)
@@ -229,5 +229,7 @@ Estende o gateway com um **reconciler de pod emergencial** que detecta quando o 
 - **Phase 7 dashboard timeline render** — esta phase só expõe `events JSONB`; consume em Phase 7
 - **WhatsApp/email alerting** — Phase 7
 - **Vast.ai client rate limit observation/auto-throttle** baseado em headers `X-RateLimit-*` (se Vast retornar) — v1 conservador 1 req/s; v2 adaptive
+- **FSM state OFF_HOURS** — originalmente listado em domain item 1 (9-estado spec); reduzido para 7-estado em revisão BLOCKER 3 (2026-05-13). Nenhum D-XX definia trigger/transitions; implementação requer dependência nova do `tenants_changed` channel + scheduleService da Fase 4. Reativar quando operacional pedir suspensão automática de provisioning fora de horários de pico.
+- **FSM state MAINTENANCE** — originalmente listado em domain item 1 (9-estado spec); reduzido para 7-estado em revisão BLOCKER 3 (2026-05-13). Não tinha gatewayctl subcomando definido (apenas 4 subcomandos D-E1: state/force-provision/force-destroy/lifecycles). Reativar quando operacional pedir window de manutenção que suprima provisioning sem desabilitar VAST_AI_API_KEY.
 
 </deferred>
