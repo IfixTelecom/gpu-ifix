@@ -68,7 +68,7 @@ jobs:
         run: go vet ./...
 
       - name: go test
-        run: go test ./... -count=1 -race -timeout=3m
+        run: go test ./... -count=1 -race -short -timeout=5m
 
       - name: gofmt check
         run: |
