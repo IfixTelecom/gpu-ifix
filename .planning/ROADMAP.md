@@ -14,7 +14,7 @@
 - [x] **Phase 5: Load Shedding (Saturation-aware Routing)** — Composite saturation signal (inflight + P95 + VRAM) with hysteresis overflows traffic to OpenRouter before local fails
 - [ ] **Phase 6: Auto-provisioning Emergency Pod (Vast.ai)** — Leader-elected state machine spins up emergency Vast.ai pod on sustained failure and tears it down after primary recovers
 - [x] **Phase 7: Observability — Dashboard & Alerting** — Next.js dashboard, Prometheus metrics, WhatsApp/email alerts with severity tiers, Sentry, audit log (9/9 plans executed; code review 3 BLOCKER + 11 WARNING resolved; 07-VERIFICATION.md status=human_needed — 5 live-UAT items deferred pending dev stack deploy)
-- [ ] **Phase 8: Client Integration — ConverseAI + Chat Ifix** — First two integrations (low risk, well-known apps) switch base_url to gateway
+- [x] **Phase 8: Client Integration — ConverseAI + Chat Ifix** — First two integrations (low risk, well-known apps) switch base_url to gateway (4/4 plans executed; code review 2 BLOCKER + 7 WARNING resolved, re-review clean; 08-VERIFICATION.md status=human_needed — SC1-SC4 live-UAT deferred pending dev stack deploy)
 - [ ] **Phase 9: Client Integration — Sensitive Tenants (Telefonia, Cobranças, Campanhas, voice-api)** — Integrate `data_class: sensitive` apps behind LGPD review and secondary-tier policies
 - [ ] **Phase 10: Production Hardening & GA** — Load tests, chaos drills, runbook, SSO/Better Auth, DNS/TLS, LGPD sign-off
 
