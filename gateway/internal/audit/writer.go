@@ -66,6 +66,13 @@ type Event struct {
 	CostLocalBRL        float64
 	CostLocalPhantomBRL float64
 	CostExternalBRL     float64
+	// Phase 7 — state-change rows (OBS-07); additive, zero-value "" for
+	// existing per-request callers. Set by WriteStateChange to one of
+	// "fsm_transition" | "tenant_activate" | "pod_lifecycle" |
+	// "threshold_change"; written to audit_log.event_kind (nullable
+	// column from migration 0020). An empty value maps to SQL NULL via
+	// nullableString in dbFlusher.Flush — per-request rows stay NULL.
+	EventKind string
 }
 
 // flusher abstracts the actual DB write so tests can inject a fake without
@@ -130,6 +137,24 @@ func (w *Writer) Enqueue(e Event) {
 			)
 		}
 	}
+}
+
+// WriteStateChange enqueues an append-only state-change audit row
+// (OBS-07). It stamps ev.EventKind = kind, defaults ev.TS to time.Now()
+// when the caller left it zero, and forwards to the existing non-blocking
+// Enqueue — it deliberately reuses the one async writer goroutine and the
+// one channel; there is NO second goroutine or channel for state changes.
+//
+// kind is one of: "fsm_transition" | "tenant_activate" | "pod_lifecycle" |
+// "threshold_change". Callers (the alerter in 07-05, tenant/pod lifecycle
+// hooks) typically pass an Event with only the relevant fields populated;
+// per-request fields stay zero-value, which the flusher maps to SQL NULL.
+func (w *Writer) WriteStateChange(kind string, ev Event) {
+	ev.EventKind = kind
+	if ev.TS.IsZero() {
+		ev.TS = time.Now()
+	}
+	w.Enqueue(ev)
 }
 
 // Dropped is the running count of events dropped since process start.
@@ -209,6 +234,10 @@ func (d *dbFlusher) Flush(ctx context.Context, batch []Event) error {
 			nullableString(e.AudioFilename), nullableString(e.AudioMime),
 			nullableInt64(e.AudioSizeBytes), nullableFloat(e.AudioDurationS),
 			nullableString(e.AudioLanguage),
+			// Phase 7 — event_kind (migration 0020, nullable). Zero-value
+			// "" maps to SQL NULL: per-request rows stay NULL, only
+			// WriteStateChange rows carry a kind.
+			nullableString(e.EventKind),
 		})
 	}
 	_, err = tx.CopyFrom(ctx,
@@ -219,6 +248,7 @@ func (d *dbFlusher) Flush(ctx context.Context, batch []Event) error {
 			"tokens_in", "tokens_out", "cost_brl", "error_code",
 			"idempotency_replayed", "stream", "truncated",
 			"audio_filename", "audio_mime", "audio_size_bytes", "audio_duration_s", "audio_language",
+			"event_kind",
 		},
 		pgx.CopyFromRows(rows),
 	)

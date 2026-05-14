@@ -176,6 +176,120 @@ func TestWriter_NormalClassGetsContentRow(t *testing.T) {
 	}
 }
 
+// TestWriter_WriteStateChangeSetsEventKind asserts WriteStateChange stamps
+// EventKind on the enqueued Event and routes it through the existing async
+// writer to the (fake) flusher (OBS-07).
+func TestWriter_WriteStateChangeSetsEventKind(t *testing.T) {
+	ff := &fakeFlusher{}
+	w := newTestWriter(ff, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	w.WriteStateChange("fsm_transition", Event{RequestID: uuid.New()})
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	<-done
+
+	if len(ff.batches) == 0 || len(ff.batches[0]) == 0 {
+		t.Fatalf("expected the state-change event to reach the flusher; got %d batches", len(ff.batches))
+	}
+	if got := ff.batches[0][0].EventKind; got != "fsm_transition" {
+		t.Fatalf("EventKind want %q, got %q", "fsm_transition", got)
+	}
+}
+
+// TestWriter_WriteStateChangeAllKinds asserts the four valid state-change
+// kinds all round-trip through the writer to the fake flusher with their
+// EventKind intact.
+func TestWriter_WriteStateChangeAllKinds(t *testing.T) {
+	kinds := []string{"fsm_transition", "tenant_activate", "pod_lifecycle", "threshold_change"}
+
+	ff := &fakeFlusher{}
+	w := newTestWriter(ff, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	for _, k := range kinds {
+		w.WriteStateChange(k, Event{RequestID: uuid.New()})
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	<-done
+
+	seen := map[string]bool{}
+	for _, b := range ff.batches {
+		for _, e := range b {
+			seen[e.EventKind] = true
+		}
+	}
+	for _, k := range kinds {
+		if !seen[k] {
+			t.Errorf("kind %q did not round-trip through the writer", k)
+		}
+	}
+}
+
+// TestWriter_WriteStateChangeDefaultsTS asserts WriteStateChange fills a
+// zero TS with time.Now() so state-change rows always carry a timestamp.
+func TestWriter_WriteStateChangeDefaultsTS(t *testing.T) {
+	ff := &fakeFlusher{}
+	w := newTestWriter(ff, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	before := time.Now()
+	w.WriteStateChange("pod_lifecycle", Event{RequestID: uuid.New()}) // TS left zero
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	<-done
+
+	if len(ff.batches) == 0 || len(ff.batches[0]) == 0 {
+		t.Fatal("expected the state-change event to reach the flusher")
+	}
+	gotTS := ff.batches[0][0].TS
+	if gotTS.IsZero() {
+		t.Fatal("WriteStateChange left TS zero — expected it to default to time.Now()")
+	}
+	if gotTS.Before(before) {
+		t.Fatalf("defaulted TS %v is before the call site %v", gotTS, before)
+	}
+}
+
+// TestWriter_EnqueueZeroEventKindAdditive asserts existing per-request
+// Enqueue callers still compile and write rows with EventKind == "" — the
+// field is purely additive (Test 3 in the plan).
+func TestWriter_EnqueueZeroEventKindAdditive(t *testing.T) {
+	ff := &fakeFlusher{}
+	w := newTestWriter(ff, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+
+	// Existing-style per-request Enqueue — no EventKind set.
+	w.Enqueue(Event{TS: time.Now(), RequestID: uuid.New(), Route: "/v1/chat/completions", DataClass: "normal"})
+
+	time.Sleep(1500 * time.Millisecond)
+	cancel()
+	<-done
+
+	if len(ff.batches) == 0 || len(ff.batches[0]) == 0 {
+		t.Fatal("expected the per-request event to reach the flusher")
+	}
+	if got := ff.batches[0][0].EventKind; got != "" {
+		t.Fatalf("per-request Enqueue EventKind want \"\" (zero-value), got %q", got)
+	}
+}
+
 func TestWriter_SensitiveClassSkipsContent(t *testing.T) {
 	var contentInserts atomic.Int32
 	ff := &fakeFlusher{afterFlush: func(batch []Event) {
