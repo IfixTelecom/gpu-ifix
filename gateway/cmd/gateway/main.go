@@ -703,6 +703,11 @@ func main() {
 					"to", to.String(), "err", werr)
 			}
 		})
+		// Phase 7 (OBS-07) — thread the shared async audit writer into the
+		// FSM so every transition leaves an append-only audit_log row with
+		// event_kind = "fsm_transition". auditWriter was constructed far
+		// earlier in boot; this is purely a setter, no reordering needed.
+		emergFSM.SetAuditWriter(auditWriter)
 		emergReconciler = emerg.NewReconciler(emerg.Deps{
 			DB:     pool,
 			Redis:  rdb,

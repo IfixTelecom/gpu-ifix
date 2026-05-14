@@ -17,6 +17,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/audit"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 )
 
@@ -305,4 +306,95 @@ func TestFSMConcurrentReadDuringTransition(t *testing.T) {
 
 	close(stop)
 	done.Wait()
+}
+
+// fakeStateChangeWriter is a recording stub for the FSM's audit
+// dependency (OBS-07). Mutex-guarded because the FSM is exercised
+// concurrently in other tests and the -race build runs all of them.
+type fakeStateChangeWriter struct {
+	mu    sync.Mutex
+	calls []fakeAuditCall
+}
+
+type fakeAuditCall struct {
+	kind  string
+	event audit.Event
+}
+
+func (f *fakeStateChangeWriter) WriteStateChange(kind string, ev audit.Event) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, fakeAuditCall{kind: kind, event: ev})
+}
+
+func (f *fakeStateChangeWriter) snapshot() []fakeAuditCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeAuditCall(nil), f.calls...)
+}
+
+func TestFSMTransitionEmitsAuditRow(t *testing.T) {
+	// OBS-07: every FSM transition MUST write exactly one
+	// WriteStateChange("fsm_transition", ...) audit row carrying the
+	// from-state, to-state, and the transition reason.
+	resetEmergGauge(t)
+	fake := &fakeStateChangeWriter{}
+	f := NewFSM(slog.Default(), nil)
+	f.SetAuditWriter(fake)
+
+	now := time.Unix(3000, 0)
+	f.Transition(StateHealthy, StateDegraded, now, "breaker_flap")
+
+	calls := fake.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("want exactly 1 audit call, got %d: %+v", len(calls), calls)
+	}
+	c := calls[0]
+	if c.kind != "fsm_transition" {
+		t.Fatalf("audit kind = %q, want fsm_transition", c.kind)
+	}
+	if c.event.Method != "healthy->degraded" {
+		t.Fatalf("audit event Method = %q, want healthy->degraded", c.event.Method)
+	}
+	if c.event.Upstream != "degraded" {
+		t.Fatalf("audit event Upstream = %q, want degraded", c.event.Upstream)
+	}
+	if c.event.ErrorCode != "breaker_flap" {
+		t.Fatalf("audit event ErrorCode = %q, want breaker_flap", c.event.ErrorCode)
+	}
+	if !c.event.TS.Equal(now) {
+		t.Fatalf("audit event TS = %v, want %v", c.event.TS, now)
+	}
+
+	// A second transition writes a second row — one per transition.
+	f.Transition(StateDegraded, StateFailedOver, now.Add(time.Second), "breaker_open")
+	if got := len(fake.snapshot()); got != 2 {
+		t.Fatalf("after second transition: want 2 audit calls, got %d", got)
+	}
+
+	// An invalid (CAS-failing) transition writes NO row — the audit
+	// happens only after the CAS commits.
+	f.Transition(StateHealthy, StateCooldown, now.Add(2*time.Second), "wrong_from")
+	if got := len(fake.snapshot()); got != 2 {
+		t.Fatalf("invalid transition must not audit: want 2 calls, got %d", got)
+	}
+}
+
+func TestFSMNilAuditWriterDoesNotPanic(t *testing.T) {
+	// A nil audit writer (the default — tests + early-boot wiring leave
+	// it unset) must NOT panic the FSM transition path.
+	resetEmergGauge(t)
+	f := NewFSM(slog.Default(), nil)
+	// auditWriter is nil; never call SetAuditWriter.
+	f.Transition(StateHealthy, StateDegraded, time.Unix(4000, 0), "nil_writer_smoke")
+	if f.State() != StateDegraded {
+		t.Fatalf("transition with nil audit writer: state = %s, want degraded", f.State())
+	}
+
+	// SetAuditWriter(nil) is also a no-op and leaves the FSM nil-safe.
+	f.SetAuditWriter(nil)
+	f.Transition(StateDegraded, StateFailedOver, time.Unix(4001, 0), "explicit_nil")
+	if f.State() != StateFailedOver {
+		t.Fatalf("transition after SetAuditWriter(nil): state = %s, want failed_over", f.State())
+	}
 }
