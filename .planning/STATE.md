@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-13T21:21:16.060Z"
+last_updated: "2026-05-14T00:00:00.000Z"
 progress:
   total_phases: 10
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 54
-  completed_plans: 42
-  percent: 40
+  completed_plans: 52
+  percent: 96
 ---
 
 # STATE: ifix-ai-gateway
@@ -27,23 +27,24 @@ progress:
 
 ## Current Position
 
-Phase: 06 (Auto-provisioning Emergency Pod (Vast.ai)) — EXECUTING
-Plan: 1 of 11
+Phase: 06 (Auto-provisioning Emergency Pod) — autonomous plans complete; blocked on human UAT
+Next autonomous-eligible work: Phase 07 (Observability — Dashboard & Alerting)
 
-- **Phase:** 5 complete (3/5 SCs validated; SC-4 + SC-5 deferred); next: Phase 6 (Auto-provisioning Emergency Pod)
-- **Phase 4 close (2026-04-21):** All 9 plans (04-01..04-09) shipped + 13-scenario integration suite green (70s testcontainers). Code review found 2 BLOCKERs + 4 HIGH + 6 MEDIUM — all fixed in commits `8b45240..6859ce9`. `04-VERIFICATION.md` status=human_needed (SC-1/SC-2/SC-4 LIVE UAT deferred pending ai-gateway-dev Portainer stack deploy — same pattern as Phase 2 SC-5 PARTIAL).
-- **Status:** Executing Phase 06
-- **Progress:** [██████████] 77% (34/44 plans; 02-09 + Phase 4 live UAT deferred + Phase 1 HUMAN-UAT smoke.yml pending)
+- **Phases 1–5:** COMPLETE on disk (all autonomous plans + VERIFICATION). Each carries a `human_needed` / `passed_partial` live-UAT deferral — the standard pattern when the dev stack is not yet deployed:
+  - Phase 1: smoke.yml Vast.ai HUMAN-UAT pending
+  - Phase 2: live deploy UAT pending (`02-VERIFICATION.md` human_needed); 02-09 cold-storage export is OPTIONAL — deferred to Phase 7/10 per Codex scope-creep ruling (GW-10 closed by 02-02)
+  - Phase 3: SC-1 live failover UAT pending (`03-VERIFICATION.md` human_needed)
+  - Phase 4: SC-1/SC-2/SC-4 live UAT deferred pending ai-gateway-dev stack deploy (`04-VERIFICATION.md` human_needed)
+  - Phase 5: SC-4 + SC-5 deferred (`05-VERIFICATION.md` passed_partial)
+- **Phase 6:** 10/11 plans executed (06-01..06-10 GREEN + summaries). 06-11 is `autonomous: false` HUMAN-UAT — Tasks 1+2 done (06-HUMAN-UAT.md + docs/RUNBOOK-EMERGENCY-POD.md created, commit 2b539fc); Task 3 is a **blocking** human-verify checkpoint (6 LIVE Vast.ai UAT scenarios, ~R$10-15). No 06-11-SUMMARY.md, no 06-VERIFICATION.md yet.
+- **Phases 7–10:** Not started (no phase directories).
+- **Status:** Executing — milestone at 52/54 plans (96%)
 
 ## Performance Metrics
 
-- **Phases completed:** 1 / 10
-- **Plans completed:** 17 / 18 (9 in Phase 1 + 8 executed in Phase 2 waves 1–7 + 1 optional staging plan)
-- **v1 requirements covered by plans:** 21 / 70 (POD-01..POD-07 from Phase 1 + GW-01..GW-10, TEN-01, TEN-02, TEN-08, TEN-09 newly planned in Phase 2)
-- **Plan 02-05:** duration 820s, 2 tasks, 14 files created, 1 file modified, 28 tests added
-- **Plan 02-06:** duration 1100s, 2 tasks, 8 files created, 1 file modified, 32 tests added (19 hash+store + 13 middleware, all -race clean)
-- **Plan 02-07:** duration 1200s, 2 tasks, 13 files created, 2 files modified, 12 integration tests added (testcontainers Postgres 16 + Redis 7; full suite ~20s wall time warm)
-- **Plan 02-08:** duration 783s, 2 tasks committed + 1 deferred (human-verify), 5 files created (Dockerfile, .dockerignore, docker-compose.yml, build-gateway.yml, deferred-items.md) + 1 file modified (gateway/README.md); docker image 27.7 MB; CI pipeline 7 jobs mirroring build-pod.yml
+- **Phases completed:** 5 / 10 (1–5 on disk; phase 6 plans done, pending human UAT)
+- **Plans completed:** 52 / 54 (Phase 1: 9/9 · Phase 2: 8/9, 02-09 deferred · Phase 3: 8/8 · Phase 4: 9/9 · Phase 5: 8/8 · Phase 6: 10/11, 06-11 human UAT)
+- **v1 requirements covered by executed plans:** POD-01..07, GW-01..10, TEN-01..09, RES-01..08, LSH-01..05, PRV-01..10 — 49/70 (remaining: OBS-01..08, INT-01..06, PRD-01..07 in Phases 7-10)
 
 ## Accumulated Context
 
@@ -65,28 +66,24 @@ Plan: 1 of 11
 
 ### Open Todos (for upcoming phases)
 
-- [ ] Phase 3: Revisit per-route WriteTimeout (chat=0 for SSE, embeddings=30s, audio=120s) to restore slow-client-DoS defense on non-streaming routes (introduced by 02-01 config.go; acceptable for Phase 2 because Phase 4 adds rate-limiting)
-- [ ] Phase 4: Wire request instrumentation middleware that calls `obs.RequestsTotal.WithLabelValues(route, status).Inc()` on the proxy layer (02-04 responsibility; the counter is already registered by 02-01)
-- [ ] Phase 1 HUMAN-UAT: Validate Qwen 3.5 27B patched Jinja template on real Vast.ai pod (tool-call correctness — blocked on smoke.yml run)
-- [ ] Phase 1 HUMAN-UAT: Empirical VRAM ceiling under load (2×8k-token chats + 1 long Whisper — blocked on smoke.yml run)
-- [ ] Phase 1 HUMAN-UAT: Cold-start ≤5 min on fresh Vast.ai 4090 (blocked on smoke.yml run)
-- [ ] Phase 3: Confirm OpenRouter upstream provider for Qwen 3.5 27B (Together? Fireworks? DeepInfra?)
-- [ ] Phase 3: Add `UPSTREAM_LLM_AUTH_BEARER` (+ STT/EMBED variants) env to inject Authorization header in proxy Director (currently strips client auth but never adds upstream auth; needed for OpenRouter/cloud fallback). Required as part of failover/circuit-breaker work.
-- [ ] Phase 5: Tune saturation thresholds (inflight N, P95 ms, VRAM GB) from Phase 1 baseline
-- [ ] Phase 6: Timeboxed (3h) Vast.ai REST API spike before committing the phase scope
+- [ ] Phase 2 close: live deploy UAT — set GitHub Secrets `PORTAINER_WEBHOOK_URL_DEV_GATEWAY` + `PORTAINER_WEBHOOK_URL_PROD_GATEWAY`; create Portainer stack `ai-gateway-dev` (Repository + webhook → `gateway/docker-compose.yml` on `develop`); run the 10-step post-push checklist in `02-08-SUMMARY.md`
+- [ ] Phase 6 close: execute 06-HUMAN-UAT.md (6 LIVE Vast.ai scenarios, ~R$10-15) → fill sign-off → write 06-11-SUMMARY.md + 06-VERIFICATION.md
+- [ ] Phase 7: 02-09 cold-storage audit export (Parquet + MinIO + retention DROP) — re-evaluate when audit_log grows past ~60 days of production traffic
 - [ ] Phase 7: Confirm Ifix WhatsApp provider (Evolution API / Z-API / Chatwoot / proprietary)
 - [ ] Phase 7: Choose dashboard auth (Better Auth instance vs shared with ConverseAI vs SSO)
 - [ ] Phase 9: Obtain LGPD review sign-off from Ifix legal before activating sensitive tenants
+- [ ] Tech debt (deferred from Phase 6): `gateway/internal/auth` argon2id tests hang under `-race`; `gateway/internal/db/migrate_test.go:53` migration count hard-coded 18, now 19 — fix via `/gsd-quick`
 
 ### Blockers
 
-None at present. Roadmap is ready for planning.
+- **Phase 6 cannot reach COMPLETE without operator action:** 06-11 Task 3 is a blocking human-verify checkpoint requiring real Vast.ai spend. Autonomous mode cannot satisfy it. Phases 7-10 do not hard-depend on Phase 6 *verification* (they depend on Phase 6 FSM states/code, which exist) — but Phase 7's goal explicitly visualizes Phase 6 FSM states, so plan Phase 7 with Phase 6 code as-built.
 
 ## Session Continuity
 
-- **Last session:** 2026-04-22T23:49:43.828Z
-- **Next session should:** Phase 2 COMPLETE (verified by gsd-verifier — `02-VERIFICATION.md`, 4/5 SC PASS + 14/14 reqs PASS, 0 FAIL; SC-5 PARTIAL only because live deploy is human-verify checkpoint). Recommended next: `/clear` then `/gsd-plan-phase 3` (failover + circuit breakers). In parallel, user closes the SC-5 PARTIAL: (a) set GitHub Secrets `PORTAINER_WEBHOOK_URL_DEV_GATEWAY` + `PORTAINER_WEBHOOK_URL_PROD_GATEWAY`; (b) create Portainer stack `ai-gateway-dev` via "Repository + webhook" pointing at `gateway/docker-compose.yml` on `develop`; (c) `git push origin master` (or merge to `develop`); (d) run the 10-step post-push checklist in `02-08-SUMMARY.md`. 02-09 (cold-storage audit export) deferred to Phase 7/10 per Codex scope-creep ruling — re-evaluate when audit_log grows past ~60 days of production traffic.
+- **Last session:** 2026-05-14 — `/gsd-autonomous` invoked. Discovered STATE.md + ROADMAP.md tracking corrupted (ROADMAP Phase Details 7-10 had copy-pasted Phase 3 plan lists; Progress table contradicted disk; STATE.md stale). Repaired both files against disk reality.
+- **Next session should:** Run `/gsd-autonomous --from 7` to plan+execute Phases 7-10. Phase 6 stays at 10/11 pending operator HUMAN-UAT — track via Open Todos above, not as an autonomous blocker.
 
 ---
 
 *State created: 2026-04-17*
+*State repaired against disk: 2026-05-14*

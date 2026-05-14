@@ -8,10 +8,10 @@
 ## Phases
 
 - [x] **Phase 1: GPU Pod Image & Smoke-Test** — Build and validate the pre-baked inference pod image (llama.cpp + Speaches + Infinity + dcgm-exporter) with VRAM measured under load
-- [ ] **Phase 2: Gateway Core + Multi-tenant Auth** — Go gateway serves OpenAI-compatible endpoints with API key auth, data-class tagging, and idempotency — single upstream, no failover yet
-- [ ] **Phase 3: Resilience & Fallback Chain** — Circuit breakers + retries + local→OpenRouter→OpenAI fallback chain with explicit streaming policy and LGPD-safe routing for sensitive tenants
+- [x] **Phase 2: Gateway Core + Multi-tenant Auth** — Go gateway serves OpenAI-compatible endpoints with API key auth, data-class tagging, and idempotency — single upstream, no failover yet
+- [x] **Phase 3: Resilience & Fallback Chain** — Circuit breakers + retries + local→OpenRouter→OpenAI fallback chain with explicit streaming policy and LGPD-safe routing for sensitive tenants
 - [x] **Phase 4: Multi-tenant Quotas, Billing & Schedule Routing** — Rate limiting, daily/monthly quotas, token counting, cost attribution per tenant, 24/7 vs peak schedules (COMPLETE 2026-04-21 — 3 SC LIVE UAT deferred pending ai-gateway-dev stack deploy; 04-VERIFICATION.md status=human_needed; 04-REVIEW-FIX.md closes 2 BLOCKER + 4 HIGH + 6 MEDIUM)
-- [ ] **Phase 5: Load Shedding (Saturation-aware Routing)** — Composite saturation signal (inflight + P95 + VRAM) with hysteresis overflows traffic to OpenRouter before local fails
+- [x] **Phase 5: Load Shedding (Saturation-aware Routing)** — Composite saturation signal (inflight + P95 + VRAM) with hysteresis overflows traffic to OpenRouter before local fails
 - [ ] **Phase 6: Auto-provisioning Emergency Pod (Vast.ai)** — Leader-elected state machine spins up emergency Vast.ai pod on sustained failure and tears it down after primary recovers
 - [ ] **Phase 7: Observability — Dashboard & Alerting** — Next.js dashboard, Prometheus metrics, WhatsApp/email alerts with severity tiers, Sentry, audit log
 - [ ] **Phase 8: Client Integration — ConverseAI + Chat Ifix** — First two integrations (low risk, well-known apps) switch base_url to gateway
@@ -56,7 +56,7 @@ Plans:
   3. Every request is traceable end-to-end: a unique `X-Request-ID` header is returned, logs carry the same ID, and a row lands in `audit_log` Postgres table.
   4. An API key carries a `data_class` (`normal` | `sensitive`) that downstream policies can read from the authenticated request context.
   5. The gateway deploys via the standard Ifix flow (GitHub → Actions → Portainer webhook) on the dedicated 4 vCPU VPS and model aliases (client sends `model: "qwen"`) resolve to the current primary model.
-**Plans:** 7/9 plans executed
+**Plans:** 8/9 plans executed (02-09 optional — deferred to Phase 7/10 per Codex scope-creep ruling)
 **Research hint:** no (Go + chi + pgx + go-redis is well-trodden; schema design is standard)
 **UI hint:** no
 
@@ -166,16 +166,7 @@ Plans:
   4. Every FSM transition, tenant activation/deactivation, pod spin-up/shutdown, and threshold change leaves an entry in the `audit_log` table accessible via dashboard or SQL.
   5. Prometheus scrape of `/metrics` stays under 10k active series and is consumable by standard Prometheus tooling.
   6. Sentry captures panics/circuit trips/provisioning failures with `authorization`, `x-api-key`, and payload bodies redacted.
-**Plans:** 8 plans
-Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [x] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [x] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [x] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [ ] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [ ] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [ ] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+**Plans:** 8 plans (estimate — not yet planned; run /gsd-plan-phase 7)
 **Research hint:** yes (confirm Ifix WhatsApp provider — Evolution API vs Z-API vs Chatwoot; confirm Better Auth vs SSO for dashboard)
 **UI hint:** yes
 
@@ -188,16 +179,7 @@ Plans:
   2. Chat Ifix transcribes a sample of real Whatsapp audios via gateway Whisper; transcription quality and latency are equivalent to the prior direct integration within ±10%.
   3. A documented rollback plan (revert env vars, redeploy) is tested end-to-end and measured at <5 minutes from decision to fully-rolled-back.
   4. Dashboard shows both apps' traffic as separate tenants with independent latency and cost panels.
-**Plans:** 8 plans
-Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [x] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [x] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [ ] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [ ] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [ ] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [ ] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+**Plans:** 8 plans (estimate — not yet planned; run /gsd-plan-phase 8)
 **Research hint:** no (straightforward env-var migration)
 **UI hint:** no
 
@@ -210,16 +192,7 @@ Plans:
   2. Cobranças and Campanhas send LLM personalization + embedding lookups through the gateway with tenant-specific quotas, and metrics confirm cost-per-request is reported correctly.
   3. voice-api continues to run TTS locally on CPU but retrieves LLM-generated scripts through the gateway.
   4. Each app has an individual smoke-test on production and a <5 min rollback playbook; LGPD review is documented before sensitive tenants go live in prod.
-**Plans:** 8 plans
-Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [x] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [x] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [ ] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [ ] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [ ] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [ ] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+**Plans:** 8 plans (estimate — not yet planned; run /gsd-plan-phase 9)
 **Research hint:** yes (LGPD review with Ifix legal — external input required before GA of sensitive tenants)
 **UI hint:** no
 
@@ -234,16 +207,7 @@ Plans:
   4. A runbook document covers detection → diagnosis → rollback → postmortem for the five most-likely incident classes; on-call operator executes one scenario from the runbook successfully.
   5. The dashboard is reachable at a HTTPS URL behind admin authentication (Better Auth or SSO); `gateway.ifix.com.br` resolves via Cloudflare with valid TLS.
   6. LGPD review sign-off is attached to the repo and all sensitive tenants have confirmed privacy-policy disclosures listing OpenAI/OpenRouter/Vast.ai as sub-processadores.
-**Plans:** 8 plans
-Plans:
-- [x] 03-01-PLAN.md — Wave 0 scaffolding: 3 Go deps + sentinel errors + probe.wav fixture + operator gates (Fireworks slug + /tokenize)
-- [x] 03-02-PLAN.md — DB foundation: 3 migrations (upstreams table + seed + NOTIFY trigger) + sqlc queries + config extension (RES-01,03,04,07)
-- [ ] 03-03-PLAN.md — breaker package: gobreaker v2 wrapper + Redis mirror + Pub/Sub subscriber + 9 obs metrics (RES-01,04)
-- [ ] 03-04-PLAN.md — upstreams loader + pgxlisten hot-reload (RES-03,04)
-- [ ] 03-05-PLAN.md — probe goroutine (zero-value errgroup) + refactored /v1/health/upstreams handler (RES-04,01)
-- [ ] 03-06-PLAN.md — proxy refactor: tokencount + directors + dispatcher + sensitive retry + tool-call interceptor + streaming + main.go wiring (RES-01..03,05..08)
-- [ ] 03-07-PLAN.md — gatewayctl upstreams CLI + 5 integration tests (state machine, fallback, sensitive block, hot reload, tool-call partial) (RES-01,03,04,06,08)
-- [ ] 03-08-PLAN.md — HUMAN-UAT: SC-1 live failover + Sentry breadcrumbs + RUNBOOK-FAILOVER.md (RES-01,03,04,06)
+**Plans:** 8 plans (estimate — not yet planned; run /gsd-plan-phase 10)
 **Research hint:** no (execution phase — no open research)
 **UI hint:** yes
 
@@ -253,12 +217,12 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. GPU Pod Image & Smoke-Test | 9/9 | Complete (human_needed) | 2026-04-18 |
-| 2. Gateway Core + Multi-tenant Auth | 3/9 | In Progress|  |
-| 3. Resilience & Fallback Chain | 0/? | Not started | - |
-| 4. Multi-tenant Quotas, Billing & Schedule Routing | 0/? | Not started | - |
-| 5. Load Shedding | 0/? | Not started | - |
-| 6. Auto-provisioning Emergency Pod | 0/11 | Plans created | - |
+| 1. GPU Pod Image & Smoke-Test | 9/9 | Complete (human_needed — smoke.yml UAT pending) | 2026-04-18 |
+| 2. Gateway Core + Multi-tenant Auth | 8/9 | Complete (human_needed — live deploy UAT; 02-09 deferred to P7/P10) | 2026-04-18 |
+| 3. Resilience & Fallback Chain | 8/8 | Complete (human_needed — SC-1 live failover UAT) | 2026-04-20 |
+| 4. Multi-tenant Quotas, Billing & Schedule Routing | 9/9 | Complete (human_needed — 3 SC live UAT deferred) | 2026-04-21 |
+| 5. Load Shedding | 8/8 | Complete (passed_partial — SC-4/SC-5 deferred) | 2026-05-11 |
+| 6. Auto-provisioning Emergency Pod | 10/11 | In Progress (autonomous plans done; 06-11 HUMAN-UAT blocking + VERIFICATION pending) | - |
 | 7. Observability — Dashboard & Alerting | 0/? | Not started | - |
 | 8. Client Integration — ConverseAI + Chat Ifix | 0/? | Not started | - |
 | 9. Client Integration — Sensitive Tenants | 0/? | Not started | - |
