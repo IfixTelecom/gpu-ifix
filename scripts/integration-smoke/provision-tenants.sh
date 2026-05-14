@@ -99,7 +99,9 @@ fi
 # Exactly four Phase-9 tenants with a PER-TENANT data_class. The parallel
 # TENANT_DATA_CLASS array carries the data_class by index — `tenant create`
 # itself takes no --data-class flag (data_class is carried by the KEY, not the
-# tenant), so the array is consumed in the key-mint step below.
+# tenant). TENANT_DATA_CLASS is the SINGLE SOURCE OF TRUTH for per-tenant
+# data_class: the key-mint step below drives `mint_tenant_key` from this array
+# by index (WR-04 — it is NOT duplicated as inline literals).
 #   slug | display name | data_class
 TENANT_SLUGS=("telefonia" "cobrancas" "campanhas" "voice-api")
 TENANT_NAMES=("Telefonia / NextBilling" "Cobranças" "Campanhas" "voice-api")
@@ -114,6 +116,19 @@ TENANT_DATA_CLASS=("sensitive" "sensitive" "normal" "normal")
 QUOTA_TENANTS=("cobrancas" "campanhas")
 QUOTA_DAILY_TOKENS=("2000000" "5000000")
 QUOTA_RPM=("120" "300")
+
+# --- parallel-array length guard (WR-03) ----------------------------------
+# These two array groups are indexed in lockstep. `set -u` does NOT trip on an
+# out-of-range index expansion — "${QUOTA_RPM[$i]}" for a missing index expands
+# to empty, not an error — so a future edit that adds a tenant to one array but
+# forgets a value array would silently run e.g. `set-quota --rpm ""` or mint a
+# key with the wrong data_class. Assert lengths match before anything runs.
+[[ ${#TENANT_SLUGS[@]} -eq ${#TENANT_NAMES[@]} && \
+   ${#TENANT_SLUGS[@]} -eq ${#TENANT_DATA_CLASS[@]} ]] \
+  || { log "FATAL: tenant arrays desynced (slugs/names/data_class length mismatch)"; exit 1; }
+[[ ${#QUOTA_TENANTS[@]} -eq ${#QUOTA_DAILY_TOKENS[@]} && \
+   ${#QUOTA_TENANTS[@]} -eq ${#QUOTA_RPM[@]} ]] \
+  || { log "FATAL: quota arrays desynced (tenants/daily-tokens/rpm length mismatch)"; exit 1; }
 
 # --- helpers --------------------------------------------------------------
 # run_gatewayctl: echoes the command under --dry-run, otherwise executes it.
@@ -229,20 +244,18 @@ mint_tenant_key() {
   printf '%s' "$k"
 }
 
-TELEFONIA_KEY=""
-COBRANCAS_KEY=""
-CAMPANHAS_KEY=""
-VOICE_API_KEY=""
+# WR-04: mint one key per tenant by iterating the SAME arrays used for
+# tenant-create, so the per-tenant data_class has exactly ONE source of truth
+# (TENANT_DATA_CLASS) instead of being re-stated as inline literals that can
+# desync. Keys land in an associative array keyed by slug.
+declare -A TENANT_KEYS=()
 ADMIN_KEY=""
 
-# telefonia tenant key (data_class=sensitive)
-TELEFONIA_KEY="$(mint_tenant_key telefonia sensitive)"
-# cobrancas tenant key (data_class=sensitive)
-COBRANCAS_KEY="$(mint_tenant_key cobrancas sensitive)"
-# campanhas tenant key (data_class=normal)
-CAMPANHAS_KEY="$(mint_tenant_key campanhas normal)"
-# voice-api tenant key (data_class=normal)
-VOICE_API_KEY="$(mint_tenant_key voice-api normal)"
+for i in "${!TENANT_SLUGS[@]}"; do
+  slug="${TENANT_SLUGS[$i]}"
+  dc="${TENANT_DATA_CLASS[$i]}"
+  TENANT_KEYS["$slug"]="$(mint_tenant_key "$slug" "$dc")"
+done
 
 # dashboard admin key
 run_gatewayctl admin-key create --label "phase-9-sensitive"
@@ -274,22 +287,22 @@ cat <<EOF
   telefonia tenant key   (data_class=sensitive — call-audio Whisper STT)
     -> client repo: fallback-register-ramais-nextbilling
        gateway api_key env var in that stack
-    ${TELEFONIA_KEY}
+    ${TENANT_KEYS[telefonia]}
 
   cobrancas tenant key   (data_class=sensitive — LLM personalization + embeds)
     -> client repo: cobrancas-api
        gateway api_key env var in that stack
-    ${COBRANCAS_KEY}
+    ${TENANT_KEYS[cobrancas]}
 
   campanhas tenant key   (data_class=normal — LLM + embeddings)
     -> client repo: campanhas-chatifix
        gateway api_key env var in that stack
-    ${CAMPANHAS_KEY}
+    ${TENANT_KEYS[campanhas]}
 
   voice-api tenant key   (data_class=normal — LLM script generation)
     -> client repo: voice-api
        gateway api_key env var in that stack
-    ${VOICE_API_KEY}
+    ${TENANT_KEYS[voice-api]}
 
   dashboard admin key    (label: phase-9-sensitive)
     -> X-Admin-Key for the Phase 7 observability dashboard
