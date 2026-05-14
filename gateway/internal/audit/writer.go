@@ -231,6 +231,48 @@ type dbFlusher struct {
 	q    *gen.Queries
 }
 
+// auditLogCopyColumns is the column list passed to tx.CopyFrom for
+// ai_gateway.audit_log. It MUST stay positionally aligned with the row
+// tuple auditLogCopyRow builds — pgx.CopyFrom matches values to columns
+// purely by position, so a column inserted here without the matching
+// edit in auditLogCopyRow (or vice versa) silently writes values into
+// the wrong columns with NO compile error. WR-11: TestAuditLogCopy*
+// in writer_test.go locks this alignment against future drift.
+var auditLogCopyColumns = []string{
+	"ts", "request_id", "tenant_id", "api_key_id", "data_class",
+	"route", "method", "upstream", "status_code", "latency_ms",
+	"tokens_in", "tokens_out", "cost_brl", "error_code",
+	"idempotency_replayed", "stream", "truncated",
+	"audio_filename", "audio_mime", "audio_size_bytes", "audio_duration_s", "audio_language",
+	"event_kind", "reason",
+}
+
+// auditLogCopyRow builds the one CopyFrom value tuple for an Event. The
+// element order MUST match auditLogCopyColumns exactly (see that var's
+// doc). Nullable columns route zero-values through the nullable* helpers
+// so per-request rows leave state-change columns (event_kind, reason)
+// NULL and vice versa.
+func auditLogCopyRow(e Event) []any {
+	return []any{
+		e.TS, e.RequestID, e.TenantID, nullableUUID(e.APIKeyID), e.DataClass,
+		e.Route, e.Method, nullableString(e.Upstream), int16(e.StatusCode), int32(e.LatencyMs),
+		nullableInt(e.TokensIn), nullableInt(e.TokensOut),
+		nil, // cost_brl — Phase 4 populates
+		nullableString(e.ErrorCode), e.IdempotencyReplayed, e.Stream, e.Truncated,
+		nullableString(e.AudioFilename), nullableString(e.AudioMime),
+		nullableInt64(e.AudioSizeBytes), nullableFloat(e.AudioDurationS),
+		nullableString(e.AudioLanguage),
+		// Phase 7 — event_kind (migration 0020, nullable). Zero-value
+		// "" maps to SQL NULL: per-request rows stay NULL, only
+		// WriteStateChange rows carry a kind.
+		nullableString(e.EventKind),
+		// Phase 7 (CR-03) — reason (migration 0022, nullable). The
+		// human-readable transition cause for state-change rows;
+		// zero-value "" maps to SQL NULL for per-request rows.
+		nullableString(e.Reason),
+	}
+}
+
 // Flush writes a batch in a single transaction: CopyFrom for audit_log
 // + row-by-row InsertAuditLogContent for normal-class rows.
 func (d *dbFlusher) Flush(ctx context.Context, batch []Event) error {
@@ -243,35 +285,11 @@ func (d *dbFlusher) Flush(ctx context.Context, batch []Event) error {
 	// audit_log CopyFrom: convert []Event to pgx.CopyFromSlice rows.
 	rows := make([][]any, 0, len(batch))
 	for _, e := range batch {
-		rows = append(rows, []any{
-			e.TS, e.RequestID, e.TenantID, nullableUUID(e.APIKeyID), e.DataClass,
-			e.Route, e.Method, nullableString(e.Upstream), int16(e.StatusCode), int32(e.LatencyMs),
-			nullableInt(e.TokensIn), nullableInt(e.TokensOut),
-			nil, // cost_brl — Phase 4 populates
-			nullableString(e.ErrorCode), e.IdempotencyReplayed, e.Stream, e.Truncated,
-			nullableString(e.AudioFilename), nullableString(e.AudioMime),
-			nullableInt64(e.AudioSizeBytes), nullableFloat(e.AudioDurationS),
-			nullableString(e.AudioLanguage),
-			// Phase 7 — event_kind (migration 0020, nullable). Zero-value
-			// "" maps to SQL NULL: per-request rows stay NULL, only
-			// WriteStateChange rows carry a kind.
-			nullableString(e.EventKind),
-			// Phase 7 (CR-03) — reason (migration 0022, nullable). The
-			// human-readable transition cause for state-change rows;
-			// zero-value "" maps to SQL NULL for per-request rows.
-			nullableString(e.Reason),
-		})
+		rows = append(rows, auditLogCopyRow(e))
 	}
 	_, err = tx.CopyFrom(ctx,
 		pgx.Identifier{"ai_gateway", "audit_log"},
-		[]string{
-			"ts", "request_id", "tenant_id", "api_key_id", "data_class",
-			"route", "method", "upstream", "status_code", "latency_ms",
-			"tokens_in", "tokens_out", "cost_brl", "error_code",
-			"idempotency_replayed", "stream", "truncated",
-			"audio_filename", "audio_mime", "audio_size_bytes", "audio_duration_s", "audio_language",
-			"event_kind", "reason",
-		},
+		auditLogCopyColumns,
 		pgx.CopyFromRows(rows),
 	)
 	if err != nil {
