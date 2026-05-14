@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import numpy as np
 import structlog
 
 # --- Constants ------------------------------------------------------------
@@ -253,8 +252,28 @@ async def run_tool_call_test(client: httpx.AsyncClient, url: str) -> tuple[bool,
 
 # --- Embeddings -----------------------------------------------------------
 
+def _p95(xs: list[int]) -> int:
+    """Nearest-rank p95 of a small int list — returns -1 for an empty list.
+
+    Replaces a numpy.percentile call (numpy was a multi-MB compiled dep
+    imported solely for this one line). `p95_ms` is informational only — the
+    embeddings_ok gate does not read it — so a tiny exact-rank computation is
+    sufficient. With 1 element this returns that element (a degenerate p95,
+    same as numpy would give), which is acceptable for a decorative field.
+    """
+    if not xs:
+        return -1
+    s = sorted(xs)
+    idx = min(len(s) - 1, int(round(0.95 * (len(s) - 1))))
+    return s[idx]
+
+
 async def run_embeddings(client: httpx.AsyncClient, url: str, batch: int) -> dict[str, Any]:
-    """Batched POST /v1/embeddings; return {p95_ms, successes, errors}."""
+    """Batched POST /v1/embeddings; return {p95_ms, successes, errors}.
+
+    `p95_ms` is informational only — it is NOT gated (embeddings_ok checks
+    `successes > 0 and not errors`).
+    """
     async def one(i: int) -> dict[str, Any]:
         payload = {"model": EMBED_MODEL, "input": [f"smoke test {i}"]}
         start = time.monotonic()
@@ -270,7 +289,7 @@ async def run_embeddings(client: httpx.AsyncClient, url: str, batch: int) -> dic
     results = await asyncio.gather(*[one(i) for i in range(batch)])
     latencies = [r["latency_ms"] for r in results if "latency_ms" in r]
     errors = [r["error"] for r in results if "error" in r]
-    p95 = int(np.percentile(latencies, 95)) if latencies else -1
+    p95 = _p95(latencies)
     return {"p95_ms": p95, "successes": len(latencies), "errors": errors}
 
 
