@@ -33,7 +33,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_GATEWAY: ghcr.io/ifixtelecom/ifix-ai-gateway
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.24'
   SQLC_VERSION: 'v1.30.0'
 
 jobs:

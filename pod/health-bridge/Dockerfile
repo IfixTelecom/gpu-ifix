@@ -13,7 +13,7 @@
 # =========================================================================
 # Stage 1: builder — Go toolchain + source
 # =========================================================================
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 WORKDIR /build
 
 # Install git/ca-certs (needed for `go mod download` if deps are remote).
