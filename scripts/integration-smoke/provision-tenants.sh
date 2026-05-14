@@ -129,9 +129,17 @@ fi
 
 log "minting tenant API keys + dashboard admin key (--mint-keys)"
 
-# parse_key: extracts the `key=<raw>` value from a gatewayctl stdout block.
+# parse_key: extracts the `key=<raw>` value from a gatewayctl mint block.
+# gatewayctl emits a fixed block where `key=` appears on EXACTLY ONE line
+# (gateway/cmd/gatewayctl/key.go:87, admin_key.go:129). Assert that count is
+# exactly 1 before extracting — taking the first `^key=` line anywhere in the
+# combined stdout+stderr stream could surface a diagnostic/warning line as the
+# tenant key. `cut -d= -f2-` preserves any `=` inside the raw key value.
 parse_key() {
-  printf '%s' "$1" | grep '^key=' | head -n1 | cut -d= -f2-
+  local count
+  count="$(printf '%s\n' "$1" | grep -c '^key=')"
+  [[ "$count" -eq 1 ]] || { log "expected exactly 1 'key=' line in mint output, got $count"; return 1; }
+  printf '%s\n' "$1" | grep '^key=' | cut -d= -f2-
 }
 
 CONVERSEAI_KEY=""
