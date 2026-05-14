@@ -152,11 +152,17 @@ type Querier interface {
 	// the dashboard gets true P50/P95/P99 with zero Prometheus-cardinality
 	// cost (Pitfall 1 — no tenant label on a histogram). $1 is the window-start
 	// timestamp; the handler passes NOW() - window (default 5 minutes). The
-	// `ts >= $1` range scan + the `GROUP BY tenant_id, route` are served by
+	// `ts >= $1` range scan + the `GROUP BY al.tenant_id, al.route` are served by
 	// idx_audit_log_ts (ts, tenant_id, route), added by migration 0021 — the
 	// (tenant_id, ts) index cannot serve a predicate with no tenant_id
 	// equality. Bounded by the window + the ~6-tenant cardinality
 	// (threat T-07-10, accept).
+	// WR-10: LEFT JOIN ai_gateway.tenants so the row carries the human-readable
+	// slug + name. The dashboard renders the name (falling back to slug, then
+	// the raw UUID) instead of showing an operator a bare UUID during incident
+	// triage. LEFT JOIN — not INNER — so an audit row whose tenant was deleted
+	// still surfaces (slug/name come back NULL, the dashboard falls back to the
+	// UUID). The join keys on tenants.id PK, a single index probe per group.
 	TenantLatencyPercentiles(ctx context.Context, ts time.Time) ([]TenantLatencyPercentilesRow, error)
 	// Updated periodically by middleware (low frequency; ok in hot path occasionally).
 	TouchAdminKeyLastUsed(ctx context.Context, id uuid.UUID) error
