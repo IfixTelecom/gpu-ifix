@@ -443,7 +443,7 @@ func TestLoad_Phase4FloatOrBogusValue(t *testing.T) {
 	}
 }
 
-// phase6OptionalEnv enumerates the eleven Phase 6 emergency-pod env vars.
+// phase6OptionalEnv enumerates the twelve Phase 6 emergency-pod env vars.
 // Cleared in setUp so a stray Portainer value does not leak into the
 // default-value assertions.
 var phase6OptionalEnv = []string{
@@ -451,6 +451,7 @@ var phase6OptionalEnv = []string{
 	"MONTHLY_EMERGENCY_BUDGET_BRL",
 	"PRIMARY_HOST_ID",
 	"PROVISION_COLDSTART_BUDGET_SECONDS",
+	"PROVISION_FAILURE_COOLDOWN_SECONDS",
 	"PROVISION_HEALTHY_DURATION_SECONDS",
 	"PROVISION_IDLE_GRACE_SECONDS",
 	"PROVISION_TRIGGER_FAILED_OVER_SECONDS",
@@ -496,6 +497,9 @@ func TestLoad_Phase6Defaults(t *testing.T) {
 	if cfg.ProvisionColdStartBudgetSeconds != 600 {
 		t.Errorf("ProvisionColdStartBudgetSeconds = %d, want 600 (D-A4)", cfg.ProvisionColdStartBudgetSeconds)
 	}
+	if cfg.ProvisionFailureCooldownSeconds != 60 {
+		t.Errorf("ProvisionFailureCooldownSeconds = %d, want 60 (emerg-bid-race-lost backoff)", cfg.ProvisionFailureCooldownSeconds)
+	}
 	if cfg.ProvisionHealthyDurationSeconds != 300 {
 		t.Errorf("ProvisionHealthyDurationSeconds = %d, want 300 (D-D1)", cfg.ProvisionHealthyDurationSeconds)
 	}
@@ -533,6 +537,7 @@ func TestLoad_Phase6CustomValues(t *testing.T) {
 	t.Setenv("USD_TO_BRL_RATE", "5.42")
 	t.Setenv("PROVISION_TRIGGER_FAILED_OVER_SECONDS", "60")
 	t.Setenv("PROVISION_COLDSTART_BUDGET_SECONDS", "300")
+	t.Setenv("PROVISION_FAILURE_COOLDOWN_SECONDS", "90")
 	t.Setenv("VAST_AI_API_KEY", "fake-key-1234")
 	t.Setenv("PRIMARY_HOST_ID", "987654")
 	t.Setenv("EMERGENCY_POD_IMAGE_TAG", "v1.1-rc2")
@@ -555,6 +560,9 @@ func TestLoad_Phase6CustomValues(t *testing.T) {
 	}
 	if cfg.ProvisionColdStartBudgetSeconds != 300 {
 		t.Errorf("ProvisionColdStartBudgetSeconds override = %d, want 300", cfg.ProvisionColdStartBudgetSeconds)
+	}
+	if cfg.ProvisionFailureCooldownSeconds != 90 {
+		t.Errorf("ProvisionFailureCooldownSeconds override = %d, want 90", cfg.ProvisionFailureCooldownSeconds)
 	}
 	if cfg.VastAIAPIKey != "fake-key-1234" {
 		t.Errorf("VastAIAPIKey override = %q, want fake-key-1234", cfg.VastAIAPIKey)

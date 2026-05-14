@@ -22,9 +22,15 @@
 //
 //   - TestEmergBidRaceLost
 //     mock Vast returns valid search but every CreateInstance fails with
-//     404+no_such_ask. After 3 attempts (D-A3), the reconciler closes the
-//     lifecycle with shutdown_reason='offer_race_lost' and the FSM
-//     transitions back to HEALTHY (provisionLifecycle returns ErrOfferRaceLost).
+//     404+no_such_ask. After EXACTLY 3 attempts (D-A3), the reconciler
+//     closes the lifecycle with shutdown_reason='offer_race_lost' and the
+//     FSM transitions EmergencyProvisioning → Cooldown (NOT straight back
+//     to Healthy). Routing the failure through Cooldown is the
+//     re-trigger-loop fix from the emerg-bid-race-lost debug session: the
+//     local-llm breaker stays OPEN for the whole test, so a direct return
+//     to Healthy would let evaluateHealthy re-fire the trigger on the next
+//     tick and hammer-loop create_hits past 3. The test asserts both that
+//     the FSM settles in Cooldown AND that create_hits stays at exactly 3.
 //
 // All tests use a vast.NewClientWithBaseURL pointed at the mock; the
 // reconciler's `SetVastClient(...)` injection slot keeps the production
@@ -313,19 +319,39 @@ func TestEmergPriceCap(t *testing.T) {
 	}
 }
 
-// TestEmergBidRaceLost — D-A3: every CreateInstance returns 404, after 3
-// attempts the lifecycle aborts with shutdown_reason='offer_race_lost'
-// and the FSM returns to HEALTHY.
+// TestEmergBidRaceLost — D-A3 + the emerg-bid-race-lost re-trigger-loop
+// fix. Every CreateInstance returns 404+no_such_ask. After EXACTLY 3
+// attempts (2s/4s/8s backoff) provisionLifecycle returns ErrOfferRaceLost,
+// closes the lifecycle with shutdown_reason='offer_race_lost', and
+// startProvisioning's goroutine transitions the FSM
+// EmergencyProvisioning → Cooldown (NOT straight back to Healthy).
 //
-// We accelerate the test by leaving the search/create returning HTTP 404.
-// The 2s/4s/8s backoff means the test budgets ~15s wall time (acceptable
-// per RESEARCH Pitfall 13 — under 60s).
+// Why Cooldown and not Healthy: the test never publishes `local-llm
+// closed`, so the breaker stays OPEN for the whole run. A direct return
+// to Healthy would let evaluateHealthy re-fire the trigger on the very
+// next 100ms tick — a new lifecycle, +3 create_hits per cycle, unbounded
+// (the original bug: create_hits climbed to 6/7 and the FSM never
+// settled). Routing through Cooldown parks the reconciler in
+// evaluateCooldown — evaluateHealthy is dormant — for the full
+// ProvisionFailureCooldownSeconds window.
+//
+// The test sets ProvisionFailureCooldownSeconds = 120s so the Cooldown
+// hold comfortably outlasts the 30s waitFor window: the FSM reaches a
+// STABLE Cooldown state the assertions can observe. The two load-bearing
+// assertions are (1) the FSM settles in Cooldown after 3 create hits and
+// (2) create_hits stays at EXACTLY 3 — the upper bound proves the
+// re-trigger loop is closed.
 func TestEmergBidRaceLost(t *testing.T) {
 	rootCtx, rootCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer rootCancel()
 
 	pool, rdb := freshSchema(t, rootCtx)
 	cfg := defaultTestCfg(t)
+	// Failure-cooldown window must outlast the 30s waitFor below so the
+	// post-failure Cooldown state is observably STABLE (no Cooldown →
+	// Healthy re-arm mid-test). defaultTestCfg leaves the other PROVISION_*
+	// knobs at 1s; only the failure-cooldown needs to be long here.
+	cfg.ProvisionFailureCooldownSeconds = 120
 
 	mock := newMockVastServer(t)
 	offers := []vast.Offer{{
@@ -361,17 +387,41 @@ func TestEmergBidRaceLost(t *testing.T) {
 	publishBreakerEvent(t, rdb, "local-llm", "open")
 
 	// After 3 race losses (with 2s/4s/8s backoff), provisionLifecycle
-	// returns ErrOfferRaceLost and startProvisioning transitions FSM
-	// EmergencyProvisioning → Healthy. Budget 30s (sum of 2+4+8 backoffs
-	// + scheduling slack).
+	// returns ErrOfferRaceLost and startProvisioning's goroutine
+	// transitions FSM EmergencyProvisioning → Cooldown. Budget 30s (sum of
+	// 2+4+8 backoffs + scheduling slack). We accept {Cooldown, Healthy}
+	// here defensively, but with ProvisionFailureCooldownSeconds=120s the
+	// 120s hold means Healthy is unreachable within the window — the
+	// stable observed state is Cooldown.
 	if !waitFor(t, 30*time.Second, 200*time.Millisecond, func() bool {
-		return mock.createHits.Load() >= 3 && fsm.State() == emerg.StateHealthy
+		s := fsm.State()
+		return mock.createHits.Load() >= 3 &&
+			(s == emerg.StateCooldown || s == emerg.StateHealthy)
 	}) {
-		t.Fatalf("FSM did not return to Healthy after 3 bid race losses; "+
+		t.Fatalf("FSM did not settle in Cooldown after 3 bid race losses; "+
 			"got fsm=%s create_hits=%d", fsm.State(), mock.createHits.Load())
 	}
-	require.GreaterOrEqual(t, mock.createHits.Load(), int64(3),
-		"D-A3 requires 3 attempts before abort")
+
+	// The re-trigger loop is closed: with the failure routed through a
+	// real Cooldown window, create_hits MUST stay at exactly 3. The
+	// original bug let it climb to 6/7 because the abort returned the FSM
+	// straight to Healthy while the breaker was still OPEN. Sample again
+	// after a short settle so a late re-trigger (if the fix regressed)
+	// would have a chance to bump the counter.
+	require.Equal(t, int64(3), mock.createHits.Load(),
+		"D-A3 requires exactly 3 attempts before abort; a count above 3 means "+
+			"the re-trigger loop re-fired (offer_race_lost did not route through Cooldown)")
+	require.Equal(t, emerg.StateCooldown, fsm.State(),
+		"offer_race_lost must park the FSM in Cooldown (not Healthy) so the "+
+			"trigger stays dormant while the local-llm breaker is still OPEN")
+
+	// Hold for a few more ticks and re-assert the upper bound — proves the
+	// Cooldown window actually suppresses re-trigger rather than the test
+	// merely catching a transient.
+	time.Sleep(2 * time.Second)
+	require.Equal(t, int64(3), mock.createHits.Load(),
+		"create_hits climbed after the settle window — Cooldown is not "+
+			"suppressing the re-trigger loop")
 
 	// The lifecycle row was closed with shutdown_reason='offer_race_lost'.
 	var reason pgtype.Text

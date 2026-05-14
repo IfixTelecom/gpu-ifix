@@ -116,7 +116,7 @@ type Config struct {
 	WriteTimeoutEmbedS int // GATEWAY_WRITE_TIMEOUT_EMBED_S (default 30)
 	WriteTimeoutAudioS int // GATEWAY_WRITE_TIMEOUT_AUDIO_S (default 120; Whisper multipart)
 
-	// Phase 6 — emergency-pod auto-provisioning (Vast.ai). All eleven
+	// Phase 6 — emergency-pod auto-provisioning (Vast.ai). All twelve
 	// fields are read at boot; defaults match CONTEXT.md decisions
 	// D-A1..D-D4 + 06-WAVE0-GATES.md. VastAIAPIKey empty does NOT
 	// fail boot — the reconciler logs a warning and stays disabled
@@ -126,6 +126,7 @@ type Config struct {
 	MonthlyEmergencyBudgetBRL         float64 // MONTHLY_EMERGENCY_BUDGET_BRL (default 200.0; D-D2 — Sentry alert only, no auto-block)
 	PrimaryHostID                     int64   // PRIMARY_HOST_ID (default 0 = unknown; D-A2 host_id != filter only applied if known)
 	ProvisionColdStartBudgetSeconds   int     // PROVISION_COLDSTART_BUDGET_SECONDS (default 600; D-A4 — /health poll budget)
+	ProvisionFailureCooldownSeconds   int     // PROVISION_FAILURE_COOLDOWN_SECONDS (default 60 — after a provisioning failure e.g. offer_race_lost, hold the FSM in Cooldown this long before re-arming the trigger; MUST exceed one 2+4+8≈14s attempt cycle so a single failed cycle actually backs off instead of hammer-looping the Vast.ai spot market)
 	ProvisionHealthyDurationSeconds   int     // PROVISION_HEALTHY_DURATION_SECONDS (default 300; D-D1 — primary must be healthy this long before cutback)
 	ProvisionIdleGraceSeconds         int     // PROVISION_IDLE_GRACE_SECONDS (default 300; D-D1 — emergency pod idle grace before destroy)
 	ProvisionTriggerFailedOverSeconds int     // PROVISION_TRIGGER_FAILED_OVER_SECONDS (default 120; D-C1 — local-llm OPEN must persist this long)
@@ -230,6 +231,7 @@ func Load() (Config, error) {
 		MonthlyEmergencyBudgetBRL:         floatOr(os.Getenv("MONTHLY_EMERGENCY_BUDGET_BRL"), 200.0),
 		PrimaryHostID:                     int64(atoiOr(os.Getenv("PRIMARY_HOST_ID"), 0)),
 		ProvisionColdStartBudgetSeconds:   atoiOr(os.Getenv("PROVISION_COLDSTART_BUDGET_SECONDS"), 600),
+		ProvisionFailureCooldownSeconds:   atoiOr(os.Getenv("PROVISION_FAILURE_COOLDOWN_SECONDS"), 60),
 		ProvisionHealthyDurationSeconds:   atoiOr(os.Getenv("PROVISION_HEALTHY_DURATION_SECONDS"), 300),
 		ProvisionIdleGraceSeconds:         atoiOr(os.Getenv("PROVISION_IDLE_GRACE_SECONDS"), 300),
 		ProvisionTriggerFailedOverSeconds: atoiOr(os.Getenv("PROVISION_TRIGGER_FAILED_OVER_SECONDS"), 120),

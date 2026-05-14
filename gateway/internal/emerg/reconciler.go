@@ -176,10 +176,24 @@ type Reconciler struct {
 	recoveringEnteredAt atomic.Int64
 
 	// cooldownEnteredAt is the unix-second timestamp at which the FSM
-	// transitioned Recovering → Cooldown. evaluateCooldown re-arms the
-	// trigger by transitioning Cooldown → Healthy after
-	// PROVISION_HEALTHY_DURATION_SECONDS.
+	// transitioned (Recovering | EmergencyProvisioning) → Cooldown.
+	// evaluateCooldown re-arms the trigger by transitioning Cooldown →
+	// Healthy after the applicable hold window (see cooldownFromFailure).
 	cooldownEnteredAt atomic.Int64
+
+	// cooldownFromFailure records WHY the FSM most recently entered
+	// Cooldown. true  → Cooldown was entered from a provisioning FAILURE
+	// (e.g. offer_race_lost abort in startProvisioning's goroutine); the
+	// hold window is the longer ProvisionFailureCooldownSeconds so the
+	// failed provisioning attempt actually backs off before the trigger
+	// can re-arm — without this, evaluateHealthy would re-fire on the
+	// very next tick while the local-llm breaker is still OPEN, hammer-
+	// looping the Vast.ai spot market (root cause of the
+	// emerg-bid-race-lost debug session). false → Cooldown was entered
+	// from the normal cutback/force-destroy path; the hold window is the
+	// existing ProvisionHealthyDurationSeconds. Always set in lock-step
+	// with cooldownEnteredAt; reset to false when Cooldown → Healthy.
+	cooldownFromFailure atomic.Bool
 
 	// vastOverride and healthCheckOverride are test-only injection slots.
 	// Production leaves both nil and reads VastAPI from deps.Vast / does
@@ -216,6 +230,20 @@ type ActiveLifecycle struct {
 	ID             int64
 	VastInstanceID int64 // 0 when bid not yet accepted
 	StartedUnix    int64
+}
+
+// enterCooldown is the single point of contact for transitioning the FSM
+// into StateCooldown. It records the entry timestamp AND why Cooldown was
+// entered (fromFailure) in lock-step so evaluateCooldown can pick the
+// correct hold window. fromFailure=true selects the longer
+// ProvisionFailureCooldownSeconds (provisioning-failure backoff);
+// fromFailure=false selects ProvisionHealthyDurationSeconds (normal
+// cutback / force-destroy suppression). Callers pass the prior FSM state
+// + reason for the FSM.Transition audit trail.
+func (r *Reconciler) enterCooldown(from State, now time.Time, reason string, fromFailure bool) {
+	r.deps.FSM.Transition(from, StateCooldown, now, reason)
+	r.cooldownEnteredAt.Store(now.Unix())
+	r.cooldownFromFailure.Store(fromFailure)
 }
 
 // NewReconciler constructs a Reconciler with sensible defaults applied
@@ -537,10 +565,11 @@ func (r *Reconciler) evaluateRecovering(ctx context.Context, now time.Time, log 
 	if lc == nil {
 		// Defensive: Recovering without an active lifecycle means a prior
 		// close already cleared the pointer. Just transition to Cooldown.
+		// fromFailure=false — this is the normal cutback path, not a
+		// provisioning failure.
 		log.Warn("evaluateRecovering: no active lifecycle; transitioning to Cooldown",
 			"idle_seconds", idleSeconds)
-		r.deps.FSM.Transition(StateRecovering, StateCooldown, now, "idle_grace_no_lifecycle")
-		r.cooldownEnteredAt.Store(now.Unix())
+		r.enterCooldown(StateRecovering, now, "idle_grace_no_lifecycle", false)
 		return
 	}
 	log.Info("emergency idle-grace elapsed: destroying pod (D-D1)",
@@ -550,16 +579,40 @@ func (r *Reconciler) evaluateRecovering(ctx context.Context, now time.Time, log 
 		log.Error("evaluateRecovering: destroyAndCloseLifecycle failed; transitioning anyway",
 			"lifecycle_id", lc.ID, "err", err)
 	}
-	r.deps.FSM.Transition(StateRecovering, StateCooldown, now, "idle_grace_elapsed")
-	r.cooldownEnteredAt.Store(now.Unix())
+	// fromFailure=false — normal cutback path; the shorter
+	// ProvisionHealthyDurationSeconds suppression window applies.
+	r.enterCooldown(StateRecovering, now, "idle_grace_elapsed", false)
 }
 
 // evaluateCooldown — Plan 06-08 oscillation suppression. Holds the FSM
-// in Cooldown for PROVISION_HEALTHY_DURATION_SECONDS (same as the
-// cutback gate; defaults to 300s). Once elapsed, transitions Cooldown
-// → Healthy so a future trigger can re-arm.
+// in Cooldown for a hold window that depends on WHY Cooldown was
+// entered:
+//
+//   - Cooldown entered from a provisioning FAILURE (offer_race_lost
+//     abort, cooldownFromFailure==true): hold for
+//     ProvisionFailureCooldownSeconds (default 60s). This is the
+//     re-trigger-loop fix — while the FSM is IN Cooldown the reconciler
+//     dispatches to evaluateCooldown, NOT evaluateHealthy, so the
+//     trigger is dormant for the full window even though the local-llm
+//     breaker is still OPEN. Without it evaluateHealthy would re-fire on
+//     the very next tick and hammer-loop the Vast.ai spot market (root
+//     cause of the emerg-bid-race-lost debug session).
+//   - Cooldown entered from the normal cutback / force-destroy path
+//     (cooldownFromFailure==false): hold for
+//     ProvisionHealthyDurationSeconds (the existing behaviour).
+//
+// Once the applicable window elapses, transitions Cooldown → Healthy so
+// a future trigger can re-arm. After a failure-cooldown expires the
+// system may re-attempt provisioning — that is correct production
+// behaviour (bid races are transient on the Vast.ai spot market; you
+// WANT to retry) — but now with a meaningful backoff instead of a ~1s
+// hammer loop.
 func (r *Reconciler) evaluateCooldown(_ context.Context, now time.Time, log *slog.Logger) {
+	fromFailure := r.cooldownFromFailure.Load()
 	holdSeconds := int64(r.deps.Cfg.ProvisionHealthyDurationSeconds)
+	if fromFailure {
+		holdSeconds = int64(r.deps.Cfg.ProvisionFailureCooldownSeconds)
+	}
 	if holdSeconds < 0 {
 		holdSeconds = 0
 	}
@@ -574,15 +627,18 @@ func (r *Reconciler) evaluateCooldown(_ context.Context, now time.Time, log *slo
 	elapsed := now.Unix() - enteredAt
 	if elapsed < holdSeconds {
 		log.Debug("evaluateCooldown: hold window not yet elapsed",
-			"elapsed_seconds", elapsed, "hold_seconds", holdSeconds)
+			"elapsed_seconds", elapsed, "hold_seconds", holdSeconds,
+			"from_failure", fromFailure)
 		return
 	}
 	log.Info("emergency cooldown elapsed: re-arming trigger (Healthy)",
-		"elapsed_seconds", elapsed, "hold_seconds", holdSeconds)
+		"elapsed_seconds", elapsed, "hold_seconds", holdSeconds,
+		"from_failure", fromFailure)
 	r.deps.FSM.Transition(StateCooldown, StateHealthy, now, "cooldown_elapsed")
-	// Reset the cooldown anchor so a future Cooldown re-entry has a
-	// fresh stamp.
+	// Reset the cooldown anchors so a future Cooldown re-entry has a
+	// fresh stamp + a clean fromFailure flag.
 	r.cooldownEnteredAt.Store(0)
+	r.cooldownFromFailure.Store(false)
 }
 
 // RegisterTraffic implements the EmergTrafficRegistrar interface for the
@@ -817,9 +873,10 @@ func (r *Reconciler) handleForceDestroy(ctx context.Context, ev redisx.EmergEven
 			"id", lc.ID, "err", err, "by_replica", ev.ReplicaID)
 		return
 	}
+	// fromFailure=false — operator force-destroy is a deliberate cutback,
+	// not a provisioning failure; the normal suppression window applies.
 	now := time.Now()
-	r.deps.FSM.Transition(r.deps.FSM.State(), StateCooldown, now, "manual_force_destroy")
-	r.cooldownEnteredAt.Store(now.Unix())
+	r.enterCooldown(r.deps.FSM.State(), now, "manual_force_destroy", false)
 	log.Info("force-destroy accepted",
 		"lifecycle_id", lc.ID, "by_replica", ev.ReplicaID)
 }

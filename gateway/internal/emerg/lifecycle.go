@@ -147,13 +147,38 @@ func (r *Reconciler) startProvisioning(parentCtx context.Context) {
 		err := r.provisionLifecycle(ctx, id)
 		obs.GatewayEmergencyProvisionDurationSeconds.Observe(time.Since(start).Seconds())
 		if err != nil {
+			reason := errReason(err)
 			r.deps.Log.Error("provisionLifecycle returned error",
 				"lifecycle_id", id, "err", err)
-			// Plan 07 will refine this — for Plan 06 we transition back to
-			// HEALTHY so a future trigger can fire. activeLifecycle is
-			// already cleared by closeLifecycle (or by the cancel paths).
-			r.deps.FSM.Transition(StateEmergencyProvisioning, StateHealthy,
-				time.Now(), "provision_error:"+errReason(err))
+			// Re-trigger-loop fix (emerg-bid-race-lost debug session):
+			// a provisioning FAILURE must NOT drop the FSM straight back
+			// to Healthy. While the local-llm breaker is still OPEN,
+			// evaluateHealthy would re-fire the trigger on the very next
+			// tick — new lifecycle, +3 create_hits per cycle, unbounded
+			// hammer loop against the Vast.ai spot market. Instead we
+			// route the offer_race_lost abort through Cooldown: while the
+			// FSM is IN Cooldown the reconciler dispatches to
+			// evaluateCooldown (NOT evaluateHealthy), so the trigger is
+			// dormant for the full ProvisionFailureCooldownSeconds window.
+			// After it expires the system may re-attempt provisioning —
+			// correct production behaviour for a transient bid race — but
+			// now with a meaningful backoff.
+			//
+			// Other failure paths (cancelled_in_flight, health_timeout,
+			// instance_terminal_state, no_offers_below_cap) keep the prior
+			// behaviour of returning to Healthy: cancellation is a
+			// deliberate recovery (local-llm came back) and the post-create
+			// terminal paths have distinct semantics that the bid-race
+			// backoff does not model. The lifecycle row already records
+			// the precise shutdown_reason via closeLifecycle regardless of
+			// the FSM target state.
+			if errors.Is(err, ErrOfferRaceLost) {
+				r.enterCooldown(StateEmergencyProvisioning, time.Now(),
+					"provision_failure:"+reason, true)
+			} else {
+				r.deps.FSM.Transition(StateEmergencyProvisioning, StateHealthy,
+					time.Now(), "provision_error:"+reason)
+			}
 		}
 	}()
 }
