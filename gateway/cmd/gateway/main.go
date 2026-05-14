@@ -45,6 +45,8 @@ import (
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/dcgm"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/emerg"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/emerg/vast"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/httpx"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/idempotency"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/models"
@@ -609,6 +611,96 @@ func main() {
 	// catches actual outage).
 	tokenCounter := proxy.NewTokenCounter(rdb, cfg.UpstreamLLMURL, log)
 
+	// ====== Phase 6 — Auto-provisioning Emergency Pod (Vast.ai) wiring ======
+	//
+	// Construction order matters:
+	//   1. If VAST_AI_API_KEY is empty → log Warn + skip the entire block.
+	//      Reconciler stays nil; chat dispatcher's EmergTraffic field stays
+	//      nil; emerg.IsActive() is never called. Phase 6 cleanly disabled.
+	//   2. Build the vast.Client + boot-time Ping (D-A5). Failure is
+	//      NON-FATAL — we log Warn and continue so a stale/wrong key surfaces
+	//      in the logs without crashing the gateway. Operator updates env
+	//      via Portainer + redeploy to fix.
+	//   3. Build FSM with an onChange callback that mirrors transitions to
+	//      Redis (gw:emerg:state Hash + gw:emerg:events Pub/Sub) so other
+	//      replicas + gatewayctl can observe live FSM state.
+	//   4. Build Reconciler with full Deps (DB, Redis, FSM, Vast, Loader, Cfg).
+	//      Spawn `go reconciler.Run(ctx)` — the Run loop spawns Subscribe +
+	//      SubscribeEmergCommands goroutines internally (W11 ordering).
+	//   5. Pass reconciler as EmergTraffic to the chat dispatcher (D-E3) so
+	//      RegisterTraffic fires on each request that resolves to the
+	//      emergency pod (drives the idle-grace destroy timer).
+	var emergReconciler *emerg.Reconciler
+	if cfg.VastAIAPIKey == "" {
+		log.Warn("Phase 6 emergency reconciler DISABLED: VAST_AI_API_KEY not set")
+	} else {
+		vastClient := vast.NewClient(cfg.VastAIAPIKey)
+		// Boot validation per D-A5. Non-fatal: a stale key should NOT prevent
+		// the gateway from starting (the rest of the proxy works fine without
+		// emergency provisioning). Operator sees the warning and rotates the
+		// key via Portainer.
+		pingCtx, pingCancel := context.WithTimeout(ctx, 30*time.Second)
+		if perr := vastClient.Ping(pingCtx); perr != nil {
+			log.Warn("vast.Ping failed at boot; emergency reconciler still starts but Vast ops will fail in runtime",
+				"err", perr)
+		} else {
+			log.Info("vast.Ping ok")
+		}
+		pingCancel()
+
+		// FSM onChange mirrors transitions to Redis so other replicas +
+		// gatewayctl can observe via gw:emerg:state Hash + gw:emerg:events
+		// Pub/Sub. Best-effort writes — failures are logged but never block
+		// the in-process FSM (mirror philosophy from breaker/shed packages).
+		emergFSM := emerg.NewFSM(log, func(from, to emerg.State, reason string) {
+			ev := redisx.EmergEvent{
+				Type:      "transition",
+				State:     to.String(),
+				Reason:    reason,
+				SinceUnix: time.Now().Unix(),
+				ReplicaID: hostnameOrUnknown(),
+			}
+			if perr := redisx.PublishEmergEvent(context.Background(), rdb, ev); perr != nil {
+				log.Warn("emerg FSM onChange: PublishEmergEvent failed",
+					"from", from.String(), "to", to.String(), "err", perr)
+			}
+			if werr := redisx.WriteEmergState(context.Background(), rdb,
+				to.String(), "", "", "", time.Now().Unix()); werr != nil {
+				log.Warn("emerg FSM onChange: WriteEmergState failed",
+					"to", to.String(), "err", werr)
+			}
+		})
+		emergReconciler = emerg.NewReconciler(emerg.Deps{
+			DB:     pool,
+			Redis:  rdb,
+			FSM:    emergFSM,
+			Vast:   vastClient,
+			Loader: loader,
+			Cfg:    cfg,
+			Log:    log,
+		})
+		go emergReconciler.Run(ctx)
+		log.Info("Phase 6 emergency reconciler started",
+			"replica_id", emergReconciler.ReplicaID(),
+			"trigger_seconds", cfg.ProvisionTriggerFailedOverSeconds,
+			"healthy_seconds", cfg.ProvisionHealthyDurationSeconds,
+			"idle_grace_seconds", cfg.ProvisionIdleGraceSeconds,
+			"coldstart_budget_seconds", cfg.ProvisionColdStartBudgetSeconds,
+			"monthly_budget_brl", cfg.MonthlyEmergencyBudgetBRL,
+		)
+	}
+
+	// emergTraffic is non-nil only when the Phase 6 reconciler is wired.
+	// Plan 06-08 D-E3: the chat dispatcher calls RegisterTraffic on each
+	// request that resolves to the emergency pod URL so the reconciler's
+	// idle-grace destroy timer (D-D1, default 300s) sees recent activity.
+	// Other roles (embed, audio) skip this — Phase 6 v1 only overrides
+	// tier-0 LLM (D-E3 deferred ideas note).
+	var emergTraffic proxy.EmergTrafficRegistrar
+	if emergReconciler != nil {
+		emergTraffic = emergReconciler
+	}
+
 	// Dispatchers — one per role. Each applies breaker-driven fallback
 	// per the dispatcher decision tree (CONTEXT.md D-A2 + D-B1..B4 + D-C4).
 	chatDispatcher := proxy.NewDispatcher(proxy.DispatcherConfig{
@@ -618,6 +710,7 @@ func main() {
 		TokenCounter: tokenCounter,
 		ContextCap:   proxy.ChatContextCap,
 		Proxies:      llmRoleProxies,
+		EmergTraffic: emergTraffic,
 		Log:          log,
 	})
 	embedDispatcher := proxy.NewDispatcher(proxy.DispatcherConfig{
@@ -1057,6 +1150,20 @@ func mustLoadLocation(name string, log *slog.Logger) *time.Location {
 		os.Exit(1)
 	}
 	return loc
+}
+
+// hostnameOrUnknown returns os.Hostname() or "unknown" when the call
+// fails. Used by the Phase 6 FSM onChange callback to stamp ReplicaID
+// on EmergEvents — matches the convention emerg.Reconciler uses
+// internally (NewReconciler) so Pub/Sub events from this main.go-level
+// publisher and from the reconciler's own publishes share a consistent
+// replica identifier.
+func hostnameOrUnknown() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "unknown"
+	}
+	return h
 }
 
 // newLogger builds the slog.Logger wrapped in the Redactor so sensitive
