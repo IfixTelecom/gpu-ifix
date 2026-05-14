@@ -347,12 +347,18 @@ async def main_async(cfg: Config) -> int:
     wer = word_error_rate(ref_norm, hyp_norm)
 
     baseline_latency_s = baseline.get("baseline_latency_s", 0.0)
-    if baseline_latency_s and baseline_latency_s > 0:
-        latency_ratio = transcription.get("latency_s", 0.0) / baseline_latency_s
-    else:
-        # No usable baseline latency — surface as a large ratio so the gate fails
-        # loudly rather than silently passing.
-        latency_ratio = float("inf")
+    # latency_evaluable is an explicit carry rather than overloading the ratio
+    # with an `inf` / `1e9` sentinel: a sentinel magic number can collide with
+    # a real (absurd) ratio and the inf->1e9 substitution in the report dict
+    # was a non-obvious coupling. When the baseline latency is missing /
+    # non-positive, latency_ratio stays None — apply_gates already treats
+    # `latency_ratio is None` as a hard gate failure.
+    latency_evaluable = bool(baseline_latency_s and baseline_latency_s > 0)
+    latency_ratio = (
+        transcription.get("latency_s", 0.0) / baseline_latency_s
+        if latency_evaluable
+        else None
+    )
 
     # --- aggregate errors ---
     errors: list[str] = []
@@ -380,8 +386,11 @@ async def main_async(cfg: Config) -> int:
         },
         "comparison": {
             "wer": round(wer, 4),
+            # null (not a sentinel) when the baseline latency was unusable —
+            # the schema allows ["number", "null"] and apply_gates fails the
+            # latency gate on None.
             "latency_ratio": (
-                round(latency_ratio, 4) if latency_ratio != float("inf") else 1e9
+                round(latency_ratio, 4) if latency_ratio is not None else None
             ),
         },
         "errors": errors,

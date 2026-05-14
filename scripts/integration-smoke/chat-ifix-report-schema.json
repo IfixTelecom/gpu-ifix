@@ -63,7 +63,7 @@
       "required": ["wer", "latency_ratio"],
       "properties": {
         "wer": { "type": "number" },
-        "latency_ratio": { "type": "number" }
+        "latency_ratio": { "type": ["number", "null"] }
       },
       "additionalProperties": false
     },
