@@ -142,6 +142,14 @@ parse_key() {
   printf '%s\n' "$1" | grep '^key=' | cut -d= -f2-
 }
 
+# parse_id: extracts the non-secret `id=<uuid>` value from a gatewayctl mint
+# block. Logged (to stderr) so a mid-sequence failure leaves an audit trail of
+# which rows were created and must be revoked — the raw `key=` value is NEVER
+# logged (secret-once discipline). Best-effort: returns empty if absent.
+parse_id() {
+  printf '%s\n' "$1" | grep '^id=' | head -n1 | cut -d= -f2-
+}
+
 CONVERSEAI_KEY=""
 CHAT_IFIX_KEY=""
 ADMIN_KEY=""
@@ -152,7 +160,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   [[ "$GW_RC" -eq 0 ]] || { log "key create (converseai) failed (exit $GW_RC): $GW_OUT"; exit 1; }
   CONVERSEAI_KEY="$(parse_key "$GW_OUT")"
   [[ -n "$CONVERSEAI_KEY" ]] || { log "key create (converseai): no key= line in output"; exit 1; }
-  log "converseai tenant key minted"
+  log "converseai tenant key minted (id=$(parse_id "$GW_OUT"))"
 fi
 
 # chat-ifix tenant key
@@ -161,7 +169,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   [[ "$GW_RC" -eq 0 ]] || { log "key create (chat-ifix) failed (exit $GW_RC): $GW_OUT"; exit 1; }
   CHAT_IFIX_KEY="$(parse_key "$GW_OUT")"
   [[ -n "$CHAT_IFIX_KEY" ]] || { log "key create (chat-ifix): no key= line in output"; exit 1; }
-  log "chat-ifix tenant key minted"
+  log "chat-ifix tenant key minted (id=$(parse_id "$GW_OUT"))"
 fi
 
 # dashboard admin key
@@ -170,7 +178,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   [[ "$GW_RC" -eq 0 ]] || { log "admin-key create failed (exit $GW_RC): $GW_OUT"; exit 1; }
   ADMIN_KEY="$(parse_key "$GW_OUT")"
   [[ -n "$ADMIN_KEY" ]] || { log "admin-key create: no key= line in output"; exit 1; }
-  log "dashboard admin key minted"
+  log "dashboard admin key minted (id=$(parse_id "$GW_OUT"))"
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
