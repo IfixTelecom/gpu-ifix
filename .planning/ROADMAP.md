@@ -166,7 +166,17 @@ Plans:
   4. Every FSM transition, tenant activation/deactivation, pod spin-up/shutdown, and threshold change leaves an entry in the `audit_log` table accessible via dashboard or SQL.
   5. Prometheus scrape of `/metrics` stays under 10k active series and is consumable by standard Prometheus tooling.
   6. Sentry captures panics/circuit trips/provisioning failures with `authorization`, `x-api-key`, and payload bodies redacted.
-**Plans:** 8 plans (estimate — not yet planned; run /gsd-plan-phase 7)
+**Plans:** 9 plans
+Plans:
+- [ ] 07-01-PLAN.md — Wave 0 scaffolding: 12 alert env vars in config + migration 0020 (audit_log.event_kind) + ListAuditStateChanges query + 2 bounded latency histograms + gateway_alert_dropped_total + alert package test fakes (OBS-01,02,04,05,07)
+- [ ] 07-02-PLAN.md — Gateway obs extensions: middleware records latency histograms + Sentry BeforeSend scrubs request/response bodies + audit.Writer EventKind field + WriteStateChange helper (OBS-02,07,08)
+- [ ] 07-03-PLAN.md — Admin JSON handlers: TenantLatencyPercentiles query + GET /admin/metrics (per-tenant P50/P95/P99 + FSM state + inflight) + GET /admin/audit (paginated state-change history) (OBS-01,07)
+- [ ] 07-04-PLAN.md — Alert external clients: redisx/alert.go dedup namespace + Channel interface + Chatwoot/ClickUp/Brevo Go clients (gobreaker + backoff.Permanent + net/smtp; zero new deps) (OBS-04,05)
+- [ ] 07-05-PLAN.md — Alert core: severity.go (event→tier→channel matrix) + dedup.go (SET NX EX 300, fail-open critical) + alerter.go (Run goroutine, 3-channel subscribe, bounded workers, ReconcileBoot) (OBS-04,06)
+- [ ] 07-06-PLAN.md — Gateway wiring: main.go constructs alert clients from config + spawns alerter goroutine early + mounts /admin/metrics + /admin/audit + FSM transitions emit fsm_transition audit rows (OBS-01,04,05,07)
+- [ ] 07-07-PLAN.md — Dashboard scaffold: greenfield dashboard/ Next.js 15 + shadcn radix-nova + standalone Better Auth (emailAndPassword) + server-side gateway proxy + unauthed→/login + Dockerfile + build-dashboard.yml + docker-compose service (OBS-03)
+- [ ] 07-08-PLAN.md — Dashboard UI: React Query 5-10s polling + (dashboard) layout + sidebar + critical banner + KPI cards + Recharts latency chart + FSM panel + tenant/audit tables + Overview/Tenants/Incidents pages + human-verify checkpoint (OBS-03)
+- [ ] 07-09-PLAN.md — HUMAN-UAT: RUNBOOK-OBSERVABILITY-ALERTING.md + 07-HUMAN-UAT.md (SC-2 live WhatsApp/email/ClickUp, SC-3 live dedup, SC-5 Prometheus cardinality, SC-6 Sentry redaction) + sign-off (OBS-02,04,05,08)
 **Research hint:** yes (confirm Ifix WhatsApp provider — Evolution API vs Z-API vs Chatwoot; confirm Better Auth vs SSO for dashboard)
 **UI hint:** yes
 
@@ -223,7 +233,7 @@ Plans:
 | 4. Multi-tenant Quotas, Billing & Schedule Routing | 9/9 | Complete (human_needed — 3 SC live UAT deferred) | 2026-04-21 |
 | 5. Load Shedding | 8/8 | Complete (passed_partial — SC-4/SC-5 deferred) | 2026-05-11 |
 | 6. Auto-provisioning Emergency Pod | 10/11 | In Progress (autonomous plans done; 06-11 HUMAN-UAT blocking + VERIFICATION pending) | - |
-| 7. Observability — Dashboard & Alerting | 0/? | Not started | - |
+| 7. Observability — Dashboard & Alerting | 0/9 | Planned (9 plans, 5 waves) | - |
 | 8. Client Integration — ConverseAI + Chat Ifix | 0/? | Not started | - |
 | 9. Client Integration — Sensitive Tenants | 0/? | Not started | - |
 | 10. Production Hardening & GA | 0/? | Not started | - |
@@ -253,3 +263,4 @@ Plans:
 *Roadmap created: 2026-04-17*
 *Phase 1 plans created: 2026-04-17*
 *Phase 6 plans created: 2026-05-13 (11 plans)*
+*Phase 7 plans created: 2026-05-14 (9 plans, 5 waves)*
