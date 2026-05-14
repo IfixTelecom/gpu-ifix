@@ -13,14 +13,28 @@
 //     space stays at O(4) per route (Pitfall 13).
 //   - Mounts last in the chain so it observes the final status code
 //     (after auth/rate-limit/quota/dispatcher potentially wrote 4xx/5xx).
+//
+// Phase 7 (OBS-02): the same middleware also records the two bounded
+// latency histograms from obs/metrics.go — RequestDurationByRoute and
+// RequestDurationByUpstream. Each carries exactly ONE bounded label
+// (route template or resolved upstream); no tenant label is added
+// (07-02 Pitfall 1 — a tenant×route×upstream cross would blow the
+// cardinality budget). The upstream label is resolved the same way the
+// audit middleware resolves it: a route-derived default
+// (llm/embed/stt), overridden by the factual upstream the dispatcher
+// stamps on the request context via auditctx.WithBillingUpstream.
 package obs
 
 import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auditctx"
 )
 
 // statusRecorder captures the response status for post-hoc label lookup.
@@ -62,8 +76,13 @@ func (s *statusRecorder) Flush() {
 func RequestsMiddleware(_ *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
 			rec := &statusRecorder{ResponseWriter: w}
 			next.ServeHTTP(rec, r)
+
+			// elapsedMs is the end-to-end request duration in milliseconds
+			// as a float64 — the unit the Phase 7 latency histograms use.
+			elapsedMs := float64(time.Since(start).Microseconds()) / 1000.0
 
 			// Label lookup: prefer the chi route pattern (bounded cardinality).
 			// Falls back to raw path if the middleware runs outside chi.
@@ -79,6 +98,46 @@ func RequestsMiddleware(_ *slog.Logger) func(http.Handler) http.Handler {
 			}
 			statusClass := strconv.Itoa(rec.status/100) + "xx"
 			RequestsTotal.WithLabelValues(route, statusClass).Inc()
+
+			// Phase 7 (OBS-02) — record the two bounded latency histograms.
+			// Both labels are bounded: routeLabel is the chi template (above);
+			// upstreamLabel is a route-derived default overridden by the
+			// factual upstream the dispatcher stamps on the request context.
+			RequestDurationByRoute.WithLabelValues(route).Observe(elapsedMs)
+			RequestDurationByUpstream.WithLabelValues(upstreamLabel(r)).Observe(elapsedMs)
 		})
+	}
+}
+
+// upstreamLabel resolves the bounded upstream label for the latency
+// histogram. It mirrors audit.Middleware's resolution: a route-derived
+// default (llm/embed/stt), overridden — when present — by the factual
+// upstream the dispatcher stamped via auditctx.WithBillingUpstream, or
+// the schedule/dispatcher intent stamped via auditctx.WithUpstreamOverride.
+// All sources are bounded value sets — never a raw path or request ID.
+func upstreamLabel(r *http.Request) string {
+	if u := auditctx.BillingUpstreamFrom(r.Context()); u != "" {
+		return u
+	}
+	if u := auditctx.UpstreamOverrideFrom(r.Context()); u != "" {
+		return u
+	}
+	return upstreamForRoute(r.URL.Path)
+}
+
+// upstreamForRoute is the route-derived upstream default. Kept in sync
+// with audit.upstreamForRoute — the two middlewares deliberately agree on
+// the same bounded default set so /metrics histograms and audit_log rows
+// label the same request identically.
+func upstreamForRoute(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/v1/chat"):
+		return "llm"
+	case strings.HasPrefix(path, "/v1/embeddings"):
+		return "embed"
+	case strings.HasPrefix(path, "/v1/audio"):
+		return "stt"
+	default:
+		return "unknown"
 	}
 }
