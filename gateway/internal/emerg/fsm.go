@@ -46,8 +46,18 @@ import (
 
 	"github.com/getsentry/sentry-go"
 
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/audit"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 )
+
+// stateChangeWriter is the audit dependency the FSM needs: the append-only
+// state-change writer (OBS-07). *audit.Writer satisfies it. Declared as an
+// interface so fsm_test.go can inject a recording fake without a live
+// Postgres pool. A nil stateChangeWriter is valid — the FSM simply skips
+// the audit call (tests that do not exercise OBS-07 leave it nil).
+type stateChangeWriter interface {
+	WriteStateChange(kind string, ev audit.Event)
+}
 
 // State is the FSM state. Stored as int32 so it can ride atomic.Int32
 // for the lockless hot-path read consumed by the dispatcher and
@@ -157,6 +167,32 @@ type FSM struct {
 	enteredAt atomic.Int64 // unix-seconds at most-recent transition
 	onChange  func(from, to State, reason string)
 	log       *slog.Logger
+	// auditWriter is the OBS-07 append-only state-change sink. Set via
+	// SetAuditWriter after construction (main.go threads the shared
+	// audit.Writer in). nil is valid — the transition path skips the
+	// audit row when it is nil, so tests and early-boot wiring never
+	// panic. Written once at boot before any transition; the FSM does
+	// not guard it with a lock because transitions only ever read it.
+	auditWriter stateChangeWriter
+}
+
+// SetAuditWriter threads the shared append-only audit writer into the FSM
+// (OBS-07). Every subsequent transition emits a WriteStateChange row with
+// event_kind = "fsm_transition". Call once at boot, BEFORE the reconciler
+// starts driving transitions. Passing a nil writer is a no-op — the FSM
+// keeps auditWriter nil and the transition path skips the audit call.
+//
+// A setter (rather than a NewFSM parameter) keeps the constructor
+// signature stable for the many existing test call sites that do not
+// exercise OBS-07.
+func (f *FSM) SetAuditWriter(w stateChangeWriter) {
+	// An untyped-nil argument is a no-op (the FSM keeps auditWriter nil).
+	// main.go always passes a live *audit.Writer, so this guard only
+	// matters for defensive callers.
+	if w == nil {
+		return
+	}
+	f.auditWriter = w
 }
 
 // NewFSM constructs an FSM initialised at StateHealthy with EnteredAt
@@ -285,6 +321,24 @@ func (f *FSM) commitTransitionSideEffects(from, to State, now time.Time, reason 
 		Timestamp: now,
 		Data:      map[string]interface{}{"reason": reason},
 	})
+	// OBS-07 — every FSM transition leaves an append-only audit_log row
+	// with event_kind = "fsm_transition". Emitted next to the Sentry
+	// breadcrumb (the other transition observability sink). The write
+	// goes through audit.Writer's existing async batch writer — Enqueue
+	// is non-blocking, so this never stalls the FSM CAS path. A nil
+	// auditWriter (tests, early-boot wiring) skips the call entirely.
+	if f.auditWriter != nil {
+		f.auditWriter.WriteStateChange("fsm_transition", audit.Event{
+			TS:       now,
+			Route:    "emerg_fsm_transition",
+			Method:   from.String() + "->" + to.String(),
+			Upstream: to.String(),
+			// The transition reason rides ErrorCode — the /admin/audit
+			// feed surfaces it as a nullable text column. It is not an
+			// error; it is the human-readable cause of the transition.
+			ErrorCode: reason,
+		})
+	}
 	if f.onChange != nil {
 		f.onChange(from, to, reason)
 	}

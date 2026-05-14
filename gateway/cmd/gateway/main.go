@@ -37,6 +37,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/admin"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/alert"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/audit"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/auth"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/billing"
@@ -90,6 +91,12 @@ type proxies struct {
 	rdb               redis.UniversalClient
 	rateLimitFailOpen bool
 	quotaFailOpen     bool
+
+	// Phase 7 — admin observability handlers (OBS-01/OBS-07). Mounted
+	// under the SAME admin-key-gated /admin sub-router as adminUsageHandler.
+	// nil in the scaffold test variant; production main wires both.
+	adminMetricsHandler http.Handler
+	adminAuditHandler   http.Handler
 
 	// Phase 5 — shed middleware collaborators. nil disables the shed
 	// middleware mount; production main always supplies all four
@@ -184,6 +191,27 @@ func main() {
 		os.Exit(2)
 	}
 	defer rdb.Close()
+
+	// ====== Phase 7 — Alerting goroutine wiring (OBS-04/05/06) ======
+	//
+	// Spawned EARLY — textually BEFORE go breakerSet.Subscribe(ctx) and
+	// go emergReconciler.Run(ctx) — because Redis Pub/Sub is at-most-once
+	// (07-RESEARCH Pitfall 4): a breaker/shed/emerg transition that fires
+	// during the boot gap is silently lost if the alerter is not yet
+	// subscribed. ReconcileBoot additionally replays an active emergency
+	// incident found in the Redis state mirror so a mid-incident restart
+	// still pages.
+	//
+	// Each of the three channels is OPTIONAL: if its required config
+	// fields are unset, the client is skipped with a single WARN (the
+	// SentryDSN precedent — an unset alert var NEVER fails boot). With
+	// zero channels the Alerter still runs: it classifies, dedups, and
+	// logs every event; the external fan-out is just an empty set.
+	alertChannels := buildAlertChannels(cfg, log)
+	alerter := alert.NewAlerter(rdb, alertChannels, log)
+	alerter.ReconcileBoot(ctx)
+	go alerter.Run(ctx)
+	log.Info("Phase 7 alerter started", "channels", len(alertChannels))
 
 	// TouchBuffer: debounced last_used_at updates (Codex review [MEDIUM] 02-03).
 	// flushFn uses a SEPARATE short-lived context so shutdown drains via
@@ -630,7 +658,12 @@ func main() {
 	//   5. Pass reconciler as EmergTraffic to the chat dispatcher (D-E3) so
 	//      RegisterTraffic fires on each request that resolves to the
 	//      emergency pod (drives the idle-grace destroy timer).
+	//
+	// Phase 7 (07-06): emergFSM is hoisted to function scope so the
+	// /admin/metrics handler can read FSM.State() for the dashboard even
+	// when Phase 6 is disabled (nil FSM → handler reports "unknown").
 	var emergReconciler *emerg.Reconciler
+	var emergFSM *emerg.FSM
 	if cfg.VastAIAPIKey == "" {
 		log.Warn("Phase 6 emergency reconciler DISABLED: VAST_AI_API_KEY not set")
 	} else {
@@ -652,7 +685,7 @@ func main() {
 		// gatewayctl can observe via gw:emerg:state Hash + gw:emerg:events
 		// Pub/Sub. Best-effort writes — failures are logged but never block
 		// the in-process FSM (mirror philosophy from breaker/shed packages).
-		emergFSM := emerg.NewFSM(log, func(from, to emerg.State, reason string) {
+		emergFSM = emerg.NewFSM(log, func(from, to emerg.State, reason string) {
 			ev := redisx.EmergEvent{
 				Type:      "transition",
 				State:     to.String(),
@@ -670,6 +703,11 @@ func main() {
 					"to", to.String(), "err", werr)
 			}
 		})
+		// Phase 7 (OBS-07) — thread the shared async audit writer into the
+		// FSM so every transition leaves an append-only audit_log row with
+		// event_kind = "fsm_transition". auditWriter was constructed far
+		// earlier in boot; this is purely a setter, no reordering needed.
+		emergFSM.SetAuditWriter(auditWriter)
 		emergReconciler = emerg.NewReconciler(emerg.Deps{
 			DB:     pool,
 			Redis:  rdb,
@@ -747,22 +785,33 @@ func main() {
 	// per D-D3.
 	adminUsageHandler := admin.NewUsageHandler(gen.New(pool), log)
 
+	// Phase 7 — admin observability handlers (OBS-01/OBS-07). Mounted
+	// under the SAME admin-key-gated /admin sub-router as adminUsageHandler.
+	// MetricsHandler reads emergFSM.State() for the dashboard's FSM panel
+	// (nil emergFSM when Phase 6 is disabled → handler reports "unknown",
+	// it never panics). AuditHandler serves the paginated audit_log
+	// state-change feed.
+	adminMetricsHandler := admin.NewMetricsHandler(gen.New(pool), emergFSM, log)
+	adminAuditHandler := admin.NewAuditHandler(gen.New(pool), log)
+
 	startedAt := time.Now()
 	r := buildRouter(log, startedAt, verifier, proxies{
-		chat:              chatHandler,
-		embed:             embedHandler,
-		audio:             audioHandler,
-		auditWriter:       auditWriter,
-		resolver:          resolver,
-		upstreamsHealth:   upstreams.NewHealthHandler(loader, breakerSet, log),
-		idemStore:         idemStore,
-		tenantsLoader:     tenantsLoader,
-		quotaChecker:      quotaChecker,
-		adminUsageHandler: adminUsageHandler,
-		adminVerifier:     adminVerifier,
-		rdb:               rdb,
-		rateLimitFailOpen: cfg.RateLimitFailOpen,
-		quotaFailOpen:     cfg.QuotaFailOpen,
+		chat:                chatHandler,
+		embed:               embedHandler,
+		audio:               audioHandler,
+		auditWriter:         auditWriter,
+		resolver:            resolver,
+		upstreamsHealth:     upstreams.NewHealthHandler(loader, breakerSet, log),
+		idemStore:           idemStore,
+		tenantsLoader:       tenantsLoader,
+		quotaChecker:        quotaChecker,
+		adminUsageHandler:   adminUsageHandler,
+		adminMetricsHandler: adminMetricsHandler,
+		adminAuditHandler:   adminAuditHandler,
+		adminVerifier:       adminVerifier,
+		rdb:                 rdb,
+		rateLimitFailOpen:   cfg.RateLimitFailOpen,
+		quotaFailOpen:       cfg.QuotaFailOpen,
 		// Phase 5 — shed middleware wiring (D-B4).
 		upstreamsLoader: loader,
 		shedSet:         shedSet,
@@ -948,6 +997,16 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 		adminRouter.Use(admin.Middleware(px.adminVerifier, log))
 		if px.adminUsageHandler != nil {
 			adminRouter.Method(http.MethodGet, "/usage", px.adminUsageHandler)
+		}
+		// Phase 7 — observability dashboard data sources. Both gated by
+		// the same admin.Middleware (X-Admin-Key bcrypt) as /usage. The
+		// unauthenticated Prometheus /metrics at r.Handle above is a
+		// DISTINCT endpoint and is deliberately left untouched.
+		if px.adminMetricsHandler != nil {
+			adminRouter.Method(http.MethodGet, "/metrics", px.adminMetricsHandler)
+		}
+		if px.adminAuditHandler != nil {
+			adminRouter.Method(http.MethodGet, "/audit", px.adminAuditHandler)
 		}
 		r.Mount("/admin", adminRouter)
 	}
@@ -1150,6 +1209,83 @@ func mustLoadLocation(name string, log *slog.Logger) *time.Location {
 		os.Exit(1)
 	}
 	return loc
+}
+
+// buildAlertChannels constructs the enabled alert delivery channels from
+// config (OBS-04/05/06). Each channel is OPTIONAL: when its required
+// config fields are unset, the channel is SKIPPED with a single WARN
+// naming the missing env var — it NEVER fails boot (the SentryDSN
+// precedent; see config.go Phase 7 fields). The returned slice may be
+// empty; alert.NewAlerter handles that — the alerter still classifies,
+// dedups, and logs every event, the external fan-out is just empty.
+//
+// The WARN logs the channel name + the missing env var NAME only —
+// never a token value (threat T-07-23).
+func buildAlertChannels(cfg config.Config, log *slog.Logger) []alert.Channel {
+	var channels []alert.Channel
+
+	// Chatwoot — critical-tier WhatsApp. Needs the API URL, the agent
+	// token, and the on-call account/inbox/contact triple to address a
+	// conversation.
+	switch {
+	case cfg.ChatwootAPIToken == "":
+		log.Warn("chatwoot alert channel disabled — CHATWOOT_API_TOKEN unset")
+	case cfg.ChatwootAPIURL == "":
+		log.Warn("chatwoot alert channel disabled — CHATWOOT_API_URL unset")
+	case cfg.ChatwootOncallAccountID == "":
+		log.Warn("chatwoot alert channel disabled — CHATWOOT_ONCALL_ACCOUNT_ID unset")
+	default:
+		channels = append(channels, alert.NewChatwootClient(alert.ChatwootConfig{
+			APIURL:    cfg.ChatwootAPIURL,
+			APIToken:  cfg.ChatwootAPIToken,
+			AccountID: cfg.ChatwootOncallAccountID,
+			InboxID:   cfg.ChatwootOncallInboxID,
+			ContactID: cfg.ChatwootOncallContactID,
+		}))
+		log.Info("chatwoot alert channel enabled")
+	}
+
+	// ClickUp — a task per critical/warning alert. Needs the static
+	// personal token and the target list ID.
+	switch {
+	case cfg.ClickUpAPIToken == "":
+		log.Warn("clickup alert channel disabled — CLICKUP_API_TOKEN unset")
+	case cfg.ClickUpAlertListID == "":
+		log.Warn("clickup alert channel disabled — CLICKUP_ALERT_LIST_ID unset")
+	default:
+		channels = append(channels, alert.NewClickUpClient(alert.ClickUpConfig{
+			APIToken: cfg.ClickUpAPIToken,
+			ListID:   cfg.ClickUpAlertListID,
+		}))
+		log.Info("clickup alert channel enabled")
+	}
+
+	// Brevo — critical+warning email via SMTP relay. Needs the relay
+	// host, the SMTP credentials, and a from/to pair.
+	switch {
+	case cfg.BrevoSMTPHost == "":
+		log.Warn("brevo alert channel disabled — BREVO_SMTP_HOST unset")
+	case cfg.BrevoSMTPUser == "":
+		log.Warn("brevo alert channel disabled — BREVO_SMTP_USER unset")
+	case cfg.BrevoSMTPPass == "":
+		log.Warn("brevo alert channel disabled — BREVO_SMTP_PASS unset")
+	case cfg.AlertEmailFrom == "":
+		log.Warn("brevo alert channel disabled — ALERT_EMAIL_FROM unset")
+	case len(cfg.AlertEmailTo) == 0:
+		log.Warn("brevo alert channel disabled — ALERT_EMAIL_TO unset")
+	default:
+		channels = append(channels, alert.NewBrevoClient(alert.BrevoConfig{
+			Host: cfg.BrevoSMTPHost,
+			Port: cfg.BrevoSMTPPort,
+			User: cfg.BrevoSMTPUser,
+			Pass: cfg.BrevoSMTPPass,
+			From: cfg.AlertEmailFrom,
+			To:   cfg.AlertEmailTo,
+		}))
+		log.Info("brevo alert channel enabled")
+	}
+
+	return channels
 }
 
 // hostnameOrUnknown returns os.Hostname() or "unknown" when the call

@@ -15,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/alert"
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/obs"
 	"github.com/ifixtelecom/gpu-ifix/pkg/openai"
 )
@@ -141,6 +143,53 @@ func TestMetrics_Exposed(t *testing.T) {
 	}
 	if !strings.Contains(s, "gateway_audit_dropped_total") {
 		t.Errorf("missing gateway_audit_dropped_total in /metrics body:\n%s", s)
+	}
+}
+
+func TestBuildAlertChannels_AllUnsetBootsClean(t *testing.T) {
+	// Phase 7 (07-06 Task 1): with every alert env var unset, the gateway
+	// MUST construct the alert subsystem without panicking — each channel
+	// is skipped with a WARN, the returned slice is empty, and the alerter
+	// still runs (classify + dedup + log; no external fan-out). An unset
+	// alert var NEVER fails boot (the SentryDSN precedent).
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	// config.Config zero value == all alert fields empty / nil, which is
+	// exactly the "all 12 alert env vars unset" boot scenario.
+	cfg := config.Config{}
+
+	channels := buildAlertChannels(cfg, log)
+	if len(channels) != 0 {
+		t.Fatalf("buildAlertChannels with all alert vars unset: want 0 channels, got %d", len(channels))
+	}
+
+	// NewAlerter must accept the empty slice and construct without panic.
+	// nil *redis.Client is acceptable here — we never call Run; we only
+	// assert construction is panic-free with zero channels.
+	a := alert.NewAlerter(nil, channels, log)
+	if a == nil {
+		t.Fatal("NewAlerter returned nil for an empty channel slice")
+	}
+}
+
+func TestBuildAlertChannels_PartialConfigEnablesSubset(t *testing.T) {
+	// A channel is enabled only when ALL its required config fields are
+	// present; a partially-configured channel is skipped, not half-built.
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	cfg := config.Config{
+		// ClickUp fully configured → enabled.
+		ClickUpAPIToken:    "tok",
+		ClickUpAlertListID: "list-123",
+		// Chatwoot missing the account ID → skipped.
+		ChatwootAPIURL:   "https://crm.example.com",
+		ChatwootAPIToken: "tok",
+		// Brevo entirely unset → skipped.
+	}
+	channels := buildAlertChannels(cfg, log)
+	if len(channels) != 1 {
+		t.Fatalf("want exactly 1 enabled channel (clickup), got %d", len(channels))
+	}
+	if channels[0].Name() != "clickup" {
+		t.Fatalf("want the enabled channel to be clickup, got %q", channels[0].Name())
 	}
 }
 
