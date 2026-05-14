@@ -50,9 +50,19 @@ function errorMessage(error: unknown): string {
     : "Não foi possível carregar as métricas do gateway.";
 }
 
-/** YYYY-MM-DD — the `/admin/usage` from/to query format. */
+/**
+ * YYYY-MM-DD — the `/admin/usage` from/to query format.
+ *
+ * WR-08: format the LOCAL date components directly. `react-day-picker`
+ * returns `Date` objects at local midnight; round-tripping through
+ * `toISOString()` shifts the operator's selected calendar day by their
+ * UTC offset (e.g. a positive-offset timezone gets the previous day),
+ * producing wrong cost numbers for the boundary days. The gateway
+ * interprets from/to in America/Sao_Paulo, so the date string must be
+ * exactly the calendar day the operator picked.
+ */
 function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 export default function TenantsPage() {
