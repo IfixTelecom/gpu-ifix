@@ -138,6 +138,16 @@ def normalize_text(s: str) -> str:
     Punctuation is stripped by dropping any character whose Unicode category
     starts with 'P' (punctuation) or 'S' (symbols) — accents are preserved
     (Portuguese needs them), only separators are normalized.
+
+    WORD-COUNT SENSITIVITY (WR-07): each P/S-category char is replaced with a
+    SPACE, not with the empty string — so intra-word punctuation becomes a word
+    boundary. "bem-vindo" -> "bem vindo" (2 words); "R$50" -> "r 50" (2 words).
+    This is applied identically to the reference and the hypothesis, so a
+    matching pair stays consistent — but the baseline transcript MUST be
+    authored with this in mind: if the reference writer spells a compound
+    "bemvindo" while the STT returns "bem-vindo", the word counts diverge and
+    WER is inflated. Author baseline transcripts to match the STT's spacing
+    and hyphenation conventions.
     """
     s = s.lower()
     out_chars: list[str] = []
@@ -160,6 +170,16 @@ def word_error_rate(reference: str, hypothesis: str) -> float:
     - edit_distance / max(len(reference_words), 1) otherwise
 
     Hand-rolled DP table — no `jiwer` dependency.
+
+    LIMITATIONS (WR-07): this is the textbook WER formula (normalized by
+    reference length only), so the single `wer` number cannot distinguish
+    "STT returned nothing" (empty hypothesis -> exactly 1.0) from "STT
+    returned one wrong word" (also near 1.0) — both correctly fail the gate,
+    but the signal is lost in the report. A hypothesis far LONGER than the
+    reference (Whisper hallucination / repetition loop) is dominated by
+    insertions and yields WER > 1.0 — which still fails the gate, so that
+    direction is safe. Word-count divergence from punctuation is documented in
+    normalize_text.
     """
     ref_words = reference.split()
     hyp_words = hypothesis.split()
