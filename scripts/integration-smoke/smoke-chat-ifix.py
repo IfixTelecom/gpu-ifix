@@ -313,10 +313,22 @@ async def main_async(cfg: Config) -> int:
 
     started_at = datetime.now(timezone.utc).isoformat()
 
-    # Load the committed fixture + baseline before any network call.
+    # Load the committed fixture + baseline before any network call. A
+    # misnamed --fixture / --baseline arg (or a malformed baseline JSON) is an
+    # operator error — fail with a clear log line + exit 1 ("fallback /
+    # unexpected" per the exit-code contract) rather than letting a raw
+    # traceback escape with no JSON report for the HUMAN-UAT asserter.
     fixture_file = Path(cfg.fixture_path)
-    fixture_bytes = fixture_file.read_bytes()
-    baseline = json.loads(Path(cfg.baseline_path).read_text())
+    try:
+        fixture_bytes = fixture_file.read_bytes()
+    except OSError as e:
+        log.error("cannot read fixture", path=cfg.fixture_path, err=str(e))
+        return 1
+    try:
+        baseline = json.loads(Path(cfg.baseline_path).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        log.error("cannot read/parse baseline", path=cfg.baseline_path, err=str(e))
+        return 1
 
     # Single client carries the tenant key on every request — the structural
     # difference vs the raw-pod smoke (the gateway requires auth).
