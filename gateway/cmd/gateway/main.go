@@ -92,6 +92,12 @@ type proxies struct {
 	rateLimitFailOpen bool
 	quotaFailOpen     bool
 
+	// Phase 7 — admin observability handlers (OBS-01/OBS-07). Mounted
+	// under the SAME admin-key-gated /admin sub-router as adminUsageHandler.
+	// nil in the scaffold test variant; production main wires both.
+	adminMetricsHandler http.Handler
+	adminAuditHandler   http.Handler
+
 	// Phase 5 — shed middleware collaborators. nil disables the shed
 	// middleware mount; production main always supplies all four
 	// pointers after the Phase 5 wiring block runs.
@@ -652,7 +658,12 @@ func main() {
 	//   5. Pass reconciler as EmergTraffic to the chat dispatcher (D-E3) so
 	//      RegisterTraffic fires on each request that resolves to the
 	//      emergency pod (drives the idle-grace destroy timer).
+	//
+	// Phase 7 (07-06): emergFSM is hoisted to function scope so the
+	// /admin/metrics handler can read FSM.State() for the dashboard even
+	// when Phase 6 is disabled (nil FSM → handler reports "unknown").
 	var emergReconciler *emerg.Reconciler
+	var emergFSM *emerg.FSM
 	if cfg.VastAIAPIKey == "" {
 		log.Warn("Phase 6 emergency reconciler DISABLED: VAST_AI_API_KEY not set")
 	} else {
@@ -674,7 +685,7 @@ func main() {
 		// gatewayctl can observe via gw:emerg:state Hash + gw:emerg:events
 		// Pub/Sub. Best-effort writes — failures are logged but never block
 		// the in-process FSM (mirror philosophy from breaker/shed packages).
-		emergFSM := emerg.NewFSM(log, func(from, to emerg.State, reason string) {
+		emergFSM = emerg.NewFSM(log, func(from, to emerg.State, reason string) {
 			ev := redisx.EmergEvent{
 				Type:      "transition",
 				State:     to.String(),
@@ -769,22 +780,33 @@ func main() {
 	// per D-D3.
 	adminUsageHandler := admin.NewUsageHandler(gen.New(pool), log)
 
+	// Phase 7 — admin observability handlers (OBS-01/OBS-07). Mounted
+	// under the SAME admin-key-gated /admin sub-router as adminUsageHandler.
+	// MetricsHandler reads emergFSM.State() for the dashboard's FSM panel
+	// (nil emergFSM when Phase 6 is disabled → handler reports "unknown",
+	// it never panics). AuditHandler serves the paginated audit_log
+	// state-change feed.
+	adminMetricsHandler := admin.NewMetricsHandler(gen.New(pool), emergFSM, log)
+	adminAuditHandler := admin.NewAuditHandler(gen.New(pool), log)
+
 	startedAt := time.Now()
 	r := buildRouter(log, startedAt, verifier, proxies{
-		chat:              chatHandler,
-		embed:             embedHandler,
-		audio:             audioHandler,
-		auditWriter:       auditWriter,
-		resolver:          resolver,
-		upstreamsHealth:   upstreams.NewHealthHandler(loader, breakerSet, log),
-		idemStore:         idemStore,
-		tenantsLoader:     tenantsLoader,
-		quotaChecker:      quotaChecker,
-		adminUsageHandler: adminUsageHandler,
-		adminVerifier:     adminVerifier,
-		rdb:               rdb,
-		rateLimitFailOpen: cfg.RateLimitFailOpen,
-		quotaFailOpen:     cfg.QuotaFailOpen,
+		chat:                chatHandler,
+		embed:               embedHandler,
+		audio:               audioHandler,
+		auditWriter:         auditWriter,
+		resolver:            resolver,
+		upstreamsHealth:     upstreams.NewHealthHandler(loader, breakerSet, log),
+		idemStore:           idemStore,
+		tenantsLoader:       tenantsLoader,
+		quotaChecker:        quotaChecker,
+		adminUsageHandler:   adminUsageHandler,
+		adminMetricsHandler: adminMetricsHandler,
+		adminAuditHandler:   adminAuditHandler,
+		adminVerifier:       adminVerifier,
+		rdb:                 rdb,
+		rateLimitFailOpen:   cfg.RateLimitFailOpen,
+		quotaFailOpen:       cfg.QuotaFailOpen,
 		// Phase 5 — shed middleware wiring (D-B4).
 		upstreamsLoader: loader,
 		shedSet:         shedSet,
@@ -970,6 +992,16 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 		adminRouter.Use(admin.Middleware(px.adminVerifier, log))
 		if px.adminUsageHandler != nil {
 			adminRouter.Method(http.MethodGet, "/usage", px.adminUsageHandler)
+		}
+		// Phase 7 — observability dashboard data sources. Both gated by
+		// the same admin.Middleware (X-Admin-Key bcrypt) as /usage. The
+		// unauthenticated Prometheus /metrics at r.Handle above is a
+		// DISTINCT endpoint and is deliberately left untouched.
+		if px.adminMetricsHandler != nil {
+			adminRouter.Method(http.MethodGet, "/metrics", px.adminMetricsHandler)
+		}
+		if px.adminAuditHandler != nil {
+			adminRouter.Method(http.MethodGet, "/audit", px.adminAuditHandler)
 		}
 		r.Mount("/admin", adminRouter)
 	}
