@@ -147,6 +147,10 @@ All are optional — the gateway boots and runs normally with every one unset; e
 - **07-02..07-06 unblocked.** The contracts are in place: the 13 alert env vars exist before any client reads them, migration 0020 + `ListAuditStateChanges` exist before the 07-03 admin handler consumes them, the latency histograms + drop counter exist before the middleware records them, and the alert-package fakes exist before 07-04/07-05 write client/alerter tests.
 - **No blockers.** Whole gateway compiles (`go build ./...`), `go vet` clean on all touched packages, `go test ./internal/config/ ./internal/obs/ ./internal/db/` green.
 
+## Self-Check: PASSED
+
+All 3 created files exist on disk; all 5 commits (`43cfe28`, `ae78e77`, `0f61aa9`, `5b0e047`, `5938f8f`) are reachable in git history. Working tree clean.
+
 ---
 *Phase: 07-observability-dashboard-alerting*
 *Completed: 2026-05-14*
