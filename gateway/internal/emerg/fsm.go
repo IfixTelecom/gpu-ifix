@@ -333,10 +333,15 @@ func (f *FSM) commitTransitionSideEffects(from, to State, now time.Time, reason 
 			Route:    "emerg_fsm_transition",
 			Method:   from.String() + "->" + to.String(),
 			Upstream: to.String(),
-			// The transition reason rides ErrorCode — the /admin/audit
-			// feed surfaces it as a nullable text column. It is not an
-			// error; it is the human-readable cause of the transition.
-			ErrorCode: reason,
+			// CR-03: the transition reason rides the dedicated `reason`
+			// column (audit_log.reason, migration 0022) — NOT ErrorCode.
+			// ErrorCode is reserved for genuine request error codes;
+			// overloading it made "a request failed" and "the FSM
+			// transitioned" indistinguishable in the /admin/audit feed.
+			// RequestID is left zero — WriteStateChange mints a fresh
+			// uuid.New() so the row has a unique, non-nil request_id
+			// (audit_log.request_id is NOT NULL + part of the PK).
+			Reason: reason,
 		})
 	}
 	if f.onChange != nil {

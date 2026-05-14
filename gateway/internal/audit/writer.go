@@ -73,6 +73,13 @@ type Event struct {
 	// column from migration 0020). An empty value maps to SQL NULL via
 	// nullableString in dbFlusher.Flush — per-request rows stay NULL.
 	EventKind string
+	// Phase 7 (CR-03) — human-readable cause of a state-change row (e.g.
+	// the emergency FSM transition reason). Written to audit_log.reason
+	// (nullable column from migration 0022), a column DEDICATED to this
+	// purpose so the transition reason no longer overloads ErrorCode
+	// (which carries request error codes). Zero-value "" maps to SQL NULL
+	// via nullableString — per-request rows stay NULL.
+	Reason string
 }
 
 // flusher abstracts the actual DB write so tests can inject a fake without
@@ -149,10 +156,21 @@ func (w *Writer) Enqueue(e Event) {
 // "threshold_change". Callers (the alerter in 07-05, tenant/pod lifecycle
 // hooks) typically pass an Event with only the relevant fields populated;
 // per-request fields stay zero-value, which the flusher maps to SQL NULL.
+//
+// CR-03: audit_log.request_id is NOT NULL and part of the
+// PRIMARY KEY (request_id, ts). State-change callers (the emergency FSM)
+// have no real request_id, so a zero ev.RequestID would write an
+// all-zeros UUID — colliding across every state change at the same ts
+// and risking the whole batch INSERT failing. When the caller leaves
+// RequestID zero, mint a fresh uuid.New() so every state-change row has a
+// unique, non-nil request_id.
 func (w *Writer) WriteStateChange(kind string, ev Event) {
 	ev.EventKind = kind
 	if ev.TS.IsZero() {
 		ev.TS = time.Now()
+	}
+	if ev.RequestID == uuid.Nil {
+		ev.RequestID = uuid.New()
 	}
 	w.Enqueue(ev)
 }
@@ -238,6 +256,10 @@ func (d *dbFlusher) Flush(ctx context.Context, batch []Event) error {
 			// "" maps to SQL NULL: per-request rows stay NULL, only
 			// WriteStateChange rows carry a kind.
 			nullableString(e.EventKind),
+			// Phase 7 (CR-03) — reason (migration 0022, nullable). The
+			// human-readable transition cause for state-change rows;
+			// zero-value "" maps to SQL NULL for per-request rows.
+			nullableString(e.Reason),
 		})
 	}
 	_, err = tx.CopyFrom(ctx,
@@ -248,7 +270,7 @@ func (d *dbFlusher) Flush(ctx context.Context, batch []Event) error {
 			"tokens_in", "tokens_out", "cost_brl", "error_code",
 			"idempotency_replayed", "stream", "truncated",
 			"audio_filename", "audio_mime", "audio_size_bytes", "audio_duration_s", "audio_language",
-			"event_kind",
+			"event_kind", "reason",
 		},
 		pgx.CopyFromRows(rows),
 	)

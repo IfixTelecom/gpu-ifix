@@ -62,6 +62,8 @@ type AiGatewayAuditLog struct {
 	AudioLanguage       pgtype.Text    `json:"audio_language"`
 	// Phase 7: optional discriminator for non-request audit rows (e.g. breaker/shed/emergency FSM state changes). NULL for ordinary request rows.
 	EventKind pgtype.Text `json:"event_kind"`
+	// Phase 7: human-readable cause of a state-change audit row (e.g. the emergency FSM transition reason). NULL for ordinary request rows. Distinct from error_code, which carries request error codes.
+	Reason pgtype.Text `json:"reason"`
 }
 
 type AiGatewayAuditLogContent struct {

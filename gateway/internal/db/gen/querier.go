@@ -109,7 +109,10 @@ type Querier interface {
 	// feed (consumed by the admin handler in plan 07-03). Returns only rows
 	// tagged with a non-NULL event_kind (FSM/state-change audit rows added by
 	// migration 0020); ordinary request rows are excluded. ts DESC + LIMIT/OFFSET
-	// keeps the page compact; the idx_audit_log_tenant_ts index serves the sort.
+	// keeps the page compact; the idx_audit_log_ts index (ts, tenant_id, route),
+	// added by migration 0021, serves the ts-leading sort.
+	// `reason` (migration 0022) carries the human-readable transition cause for
+	// state-change rows — distinct from error_code (request error codes).
 	ListAuditStateChanges(ctx context.Context, arg ListAuditStateChangesParams) ([]ListAuditStateChangesRow, error)
 	// Used by `gatewayctl emerg lifecycles --since N --limit M`. Excludes the
 	// events JSONB column (callers fetch via id when needed) so the listing is
@@ -149,8 +152,11 @@ type Querier interface {
 	// the dashboard gets true P50/P95/P99 with zero Prometheus-cardinality
 	// cost (Pitfall 1 — no tenant label on a histogram). $1 is the window-start
 	// timestamp; the handler passes NOW() - window (default 5 minutes). The
-	// ts >= $1 scan is served by idx_audit_log_tenant_ts and bounded by the
-	// window + the ~6-tenant cardinality (threat T-07-10, accept).
+	// `ts >= $1` range scan + the `GROUP BY tenant_id, route` are served by
+	// idx_audit_log_ts (ts, tenant_id, route), added by migration 0021 — the
+	// (tenant_id, ts) index cannot serve a predicate with no tenant_id
+	// equality. Bounded by the window + the ~6-tenant cardinality
+	// (threat T-07-10, accept).
 	TenantLatencyPercentiles(ctx context.Context, ts time.Time) ([]TenantLatencyPercentilesRow, error)
 	// Updated periodically by middleware (low frequency; ok in hot path occasionally).
 	TouchAdminKeyLastUsed(ctx context.Context, id uuid.UUID) error

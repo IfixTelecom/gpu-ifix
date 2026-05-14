@@ -359,8 +359,14 @@ func TestFSMTransitionEmitsAuditRow(t *testing.T) {
 	if c.event.Upstream != "degraded" {
 		t.Fatalf("audit event Upstream = %q, want degraded", c.event.Upstream)
 	}
-	if c.event.ErrorCode != "breaker_flap" {
-		t.Fatalf("audit event ErrorCode = %q, want breaker_flap", c.event.ErrorCode)
+	// CR-03: the transition reason rides the dedicated Reason field
+	// (audit_log.reason column), NOT ErrorCode — ErrorCode is reserved
+	// for genuine request error codes.
+	if c.event.Reason != "breaker_flap" {
+		t.Fatalf("audit event Reason = %q, want breaker_flap", c.event.Reason)
+	}
+	if c.event.ErrorCode != "" {
+		t.Fatalf("audit event ErrorCode = %q, want empty (reason must not overload ErrorCode)", c.event.ErrorCode)
 	}
 	if !c.event.TS.Equal(now) {
 		t.Fatalf("audit event TS = %v, want %v", c.event.TS, now)

@@ -11,9 +11,12 @@ ON CONFLICT (request_id, ts) DO NOTHING;
 -- feed (consumed by the admin handler in plan 07-03). Returns only rows
 -- tagged with a non-NULL event_kind (FSM/state-change audit rows added by
 -- migration 0020); ordinary request rows are excluded. ts DESC + LIMIT/OFFSET
--- keeps the page compact; the idx_audit_log_tenant_ts index serves the sort.
+-- keeps the page compact; the idx_audit_log_ts index (ts, tenant_id, route),
+-- added by migration 0021, serves the ts-leading sort.
+-- `reason` (migration 0022) carries the human-readable transition cause for
+-- state-change rows — distinct from error_code (request error codes).
 SELECT ts, request_id, tenant_id, route, method, upstream, status_code,
-       latency_ms, error_code, event_kind
+       latency_ms, error_code, event_kind, reason
 FROM ai_gateway.audit_log
 WHERE event_kind IS NOT NULL
 ORDER BY ts DESC
@@ -26,8 +29,11 @@ LIMIT $1 OFFSET $2;
 -- the dashboard gets true P50/P95/P99 with zero Prometheus-cardinality
 -- cost (Pitfall 1 — no tenant label on a histogram). $1 is the window-start
 -- timestamp; the handler passes NOW() - window (default 5 minutes). The
--- ts >= $1 scan is served by idx_audit_log_tenant_ts and bounded by the
--- window + the ~6-tenant cardinality (threat T-07-10, accept).
+-- `ts >= $1` range scan + the `GROUP BY tenant_id, route` are served by
+-- idx_audit_log_ts (ts, tenant_id, route), added by migration 0021 — the
+-- (tenant_id, ts) index cannot serve a predicate with no tenant_id
+-- equality. Bounded by the window + the ~6-tenant cardinality
+-- (threat T-07-10, accept).
 SELECT tenant_id,
        route,
        percentile_cont(0.50) WITHIN GROUP (ORDER BY latency_ms) AS p50,

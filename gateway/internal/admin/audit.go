@@ -48,8 +48,10 @@ type AuditResponse struct {
 }
 
 // AuditRow is one audit_log state-change row. Nullable Postgres columns
-// (upstream, error_code, event_kind) are rendered as JSON null when unset
-// via *string.
+// (upstream, error_code, event_kind, reason) are rendered as JSON null
+// when unset via *string. CR-03: `reason` is the human-readable cause of
+// a state-change row (e.g. the emergency FSM transition reason) — a
+// column DEDICATED to that purpose, distinct from error_code.
 type AuditRow struct {
 	Ts         string  `json:"ts"`
 	RequestID  string  `json:"request_id"`
@@ -61,6 +63,7 @@ type AuditRow struct {
 	LatencyMs  int32   `json:"latency_ms"`
 	ErrorCode  *string `json:"error_code"`
 	EventKind  *string `json:"event_kind"`
+	Reason     *string `json:"reason"`
 }
 
 // auditQueries isolates the sqlc surface used by the handler. Test
@@ -155,6 +158,7 @@ func (h *AuditHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			LatencyMs:  row.LatencyMs,
 			ErrorCode:  pgTextPtr(row.ErrorCode),
 			EventKind:  pgTextPtr(row.EventKind),
+			Reason:     pgTextPtr(row.Reason),
 		})
 	}
 
