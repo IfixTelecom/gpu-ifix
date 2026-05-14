@@ -94,6 +94,13 @@ import structlog
 # access is required (the /admin/audit endpoint is event_kind-filtered).
 import psycopg
 
+# jsonschema is a HARD dependency (WR-05): it is listed in requirements.txt and
+# this is a SECURITY smoke whose entire output contract IS the JSON report. A
+# missing jsonschema must be a startup error, NOT a silently-skipped
+# validation — import at module top so the script refuses to run without it.
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
+
 # --- Constants ------------------------------------------------------------
 
 SCHEMA_VERSION = "1.0.0"
@@ -739,25 +746,34 @@ async def main_async(cfg: Config) -> int:
     except Exception:
         pass
 
-    # Validate against the schema before writing — warn-don't-fail on mismatch
-    # (a schema drift should not crash a smoke that produced a real report).
+    # Validate against the schema before writing. WR-05: a schema-INVALID
+    # report is a hard failure — for a security smoke whose entire output
+    # contract is the report, a structurally broken report that a downstream
+    # asserter may misparse must NOT be allowed to exit 0. The report is still
+    # written (for debugging) but the validation failure is recorded in
+    # errors[] and forces a non-zero exit. (jsonschema itself is imported at
+    # module top, so a missing dep already failed at startup.)
+    schema_invalid = False
+    schema = json.loads(
+        (
+            Path(__file__).parent / "sensitive-failover-report-schema.json"
+        ).read_text()
+    )
     try:
-        from jsonschema import Draft202012Validator
-
-        schema = json.loads(
-            (
-                Path(__file__).parent / "sensitive-failover-report-schema.json"
-            ).read_text()
-        )
         Draft202012Validator(schema).validate(report)
-    except Exception as e:
-        log.warning(
-            "report does not match schema; writing anyway for debugging",
-            err=str(e),
-        )
+    except ValidationError as e:
+        schema_invalid = True
+        msg = f"report failed schema validation: {e.message}"
+        log.error("report does not match schema", err=msg)
+        errors.append(msg)
+        report["errors"] = errors
 
     Path(cfg.out_path).write_text(json.dumps(report, indent=2, sort_keys=True))
     log.info("report written", path=cfg.out_path, gates=report["gates"])
+
+    if schema_invalid:
+        log.error("RES-08 SENSITIVE-FAILOVER REPORT IS SCHEMA-INVALID", exit=1)
+        return 1
 
     code = exit_code_for_gates(report["gates"])
     if code != 0:
@@ -801,20 +817,23 @@ def _write_unevaluated_report(
             "all_passed": False,
         },
     }
+    # WR-05: validate the unevaluated report too. If this minimal,
+    # code-generated shape fails the schema it is a code bug, not schema drift
+    # — write it for debugging, then re-raise so it surfaces loudly rather than
+    # being swallowed with a warning. (jsonschema is imported at module top.)
+    schema = json.loads(
+        (
+            Path(__file__).parent / "sensitive-failover-report-schema.json"
+        ).read_text()
+    )
     try:
-        from jsonschema import Draft202012Validator
-
-        schema = json.loads(
-            (
-                Path(__file__).parent / "sensitive-failover-report-schema.json"
-            ).read_text()
-        )
         Draft202012Validator(schema).validate(report)
-    except Exception as e:
-        log.warning(
-            "unevaluated report does not match schema; writing anyway",
-            err=str(e),
+    except ValidationError as e:
+        Path(cfg.out_path).write_text(json.dumps(report, indent=2, sort_keys=True))
+        log.error(
+            "unevaluated report is schema-invalid (code bug)", err=e.message
         )
+        raise
     Path(cfg.out_path).write_text(json.dumps(report, indent=2, sort_keys=True))
     log.info("unevaluated report written", path=cfg.out_path)
 
