@@ -5,7 +5,14 @@
  * how long ago the last successful React Query refetch landed. Sits next to
  * the page title.
  *
- * Ticks once per second off `dataUpdatedAt` (epoch ms from the query).
+ * WR-07: `seconds` is computed from `Date.now()` AT RENDER TIME, not from a
+ * value captured by the `setInterval` callback. A backgrounded tab throttles
+ * `setInterval` (so it fires less often), but `Date.now()` is never
+ * throttled — only the re-render frequency is. A stale render showing a
+ * fresh `Date.now() - updatedAt` is still correct, which is exactly what a
+ * staleness indicator must be when the tab is backgrounded. The interval
+ * here exists ONLY to trigger periodic re-renders; the `tick` state value
+ * is intentionally unused.
  */
 
 import { useEffect, useState } from "react";
@@ -16,16 +23,19 @@ export interface StaleIndicatorProps {
 }
 
 export function StaleIndicator({ updatedAt }: StaleIndicatorProps) {
-  const [now, setNow] = useState(() => Date.now());
+  // `tick` is a re-render trigger only — the displayed value is derived
+  // from Date.now() below, never from this state.
+  const [, setTick] = useState(0);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
   if (!updatedAt) return null;
 
-  const seconds = Math.max(0, Math.round((now - updatedAt) / 1000));
+  // Read wall time at render — never a throttled setInterval-captured now.
+  const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
 
   return (
     <span className="text-[12px] font-semibold text-muted-foreground tabular-nums">
