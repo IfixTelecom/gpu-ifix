@@ -104,6 +104,12 @@ type Querier interface {
 	// Admin surface (gatewayctl upstreams list). Returns every row regardless
 	// of enabled state so the operator can re-enable disabled upstreams.
 	ListAllUpstreams(ctx context.Context) ([]AiGatewayUpstream, error)
+	// Phase 7 — paginated read for the observability dashboard's state-change
+	// feed (consumed by the admin handler in plan 07-03). Returns only rows
+	// tagged with a non-NULL event_kind (FSM/state-change audit rows added by
+	// migration 0020); ordinary request rows are excluded. ts DESC + LIMIT/OFFSET
+	// keeps the page compact; the idx_audit_log_tenant_ts index serves the sort.
+	ListAuditStateChanges(ctx context.Context, arg ListAuditStateChangesParams) ([]ListAuditStateChangesRow, error)
 	// Used by `gatewayctl emerg lifecycles --since N --limit M`. Excludes the
 	// events JSONB column (callers fetch via id when needed) so the listing is
 	// compact for tabwriter rendering.

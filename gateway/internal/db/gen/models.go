@@ -60,6 +60,8 @@ type AiGatewayAuditLog struct {
 	AudioSizeBytes      pgtype.Int8    `json:"audio_size_bytes"`
 	AudioDurationS      pgtype.Float4  `json:"audio_duration_s"`
 	AudioLanguage       pgtype.Text    `json:"audio_language"`
+	// Phase 7: optional discriminator for non-request audit rows (e.g. breaker/shed/emergency FSM state changes). NULL for ordinary request rows.
+	EventKind pgtype.Text `json:"event_kind"`
 }
 
 type AiGatewayAuditLogContent struct {

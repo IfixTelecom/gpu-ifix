@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const insertAuditLogContent = `-- name: InsertAuditLogContent :exec
@@ -36,4 +37,67 @@ func (q *Queries) InsertAuditLogContent(ctx context.Context, arg InsertAuditLogC
 		arg.Response,
 	)
 	return err
+}
+
+const listAuditStateChanges = `-- name: ListAuditStateChanges :many
+SELECT ts, request_id, tenant_id, route, method, upstream, status_code,
+       latency_ms, error_code, event_kind
+FROM ai_gateway.audit_log
+WHERE event_kind IS NOT NULL
+ORDER BY ts DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListAuditStateChangesParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type ListAuditStateChangesRow struct {
+	Ts         time.Time   `json:"ts"`
+	RequestID  uuid.UUID   `json:"request_id"`
+	TenantID   uuid.UUID   `json:"tenant_id"`
+	Route      string      `json:"route"`
+	Method     string      `json:"method"`
+	Upstream   pgtype.Text `json:"upstream"`
+	StatusCode int16       `json:"status_code"`
+	LatencyMs  int32       `json:"latency_ms"`
+	ErrorCode  pgtype.Text `json:"error_code"`
+	EventKind  pgtype.Text `json:"event_kind"`
+}
+
+// Phase 7 — paginated read for the observability dashboard's state-change
+// feed (consumed by the admin handler in plan 07-03). Returns only rows
+// tagged with a non-NULL event_kind (FSM/state-change audit rows added by
+// migration 0020); ordinary request rows are excluded. ts DESC + LIMIT/OFFSET
+// keeps the page compact; the idx_audit_log_tenant_ts index serves the sort.
+func (q *Queries) ListAuditStateChanges(ctx context.Context, arg ListAuditStateChangesParams) ([]ListAuditStateChangesRow, error) {
+	rows, err := q.db.Query(ctx, listAuditStateChanges, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAuditStateChangesRow
+	for rows.Next() {
+		var i ListAuditStateChangesRow
+		if err := rows.Scan(
+			&i.Ts,
+			&i.RequestID,
+			&i.TenantID,
+			&i.Route,
+			&i.Method,
+			&i.Upstream,
+			&i.StatusCode,
+			&i.LatencyMs,
+			&i.ErrorCode,
+			&i.EventKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
