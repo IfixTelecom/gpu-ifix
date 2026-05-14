@@ -189,7 +189,12 @@ Plans:
   2. Chat Ifix transcribes a sample of real Whatsapp audios via gateway Whisper; transcription quality and latency are equivalent to the prior direct integration within ±10%.
   3. A documented rollback plan (revert env vars, redeploy) is tested end-to-end and measured at <5 minutes from decision to fully-rolled-back.
   4. Dashboard shows both apps' traffic as separate tenants with independent latency and cost panels.
-**Plans:** 8 plans (estimate — not yet planned; run /gsd-plan-phase 8)
+**Plans:** 4 plans (3 waves)
+Plans:
+- [ ] 08-01-PLAN.md — Idempotent provision-tenants.sh seed script (wraps gatewayctl tenant/key/admin-key create) + integration-smoke README (INT-01, INT-02)
+- [ ] 08-02-PLAN.md — smoke-converseai.py (chat/streaming/tool-call/embedding gateway smoke) + report schema + trimmed requirements (INT-01)
+- [ ] 08-03-PLAN.md — smoke-chat-ifix.py (Whisper transcription smoke, ±10% latency + WER quality gates) + committed WhatsApp audio fixture + baseline (INT-02)
+- [ ] 08-04-PLAN.md — RUNBOOK-CLIENT-INTEGRATION.md (<5-min rollback procedure) + 08-HUMAN-UAT.md scenario sheet + blocking live-UAT checkpoint (INT-01, INT-02)
 **Research hint:** no (straightforward env-var migration)
 **UI hint:** no
 
@@ -234,7 +239,7 @@ Plans:
 | 5. Load Shedding | 8/8 | Complete (passed_partial — SC-4/SC-5 deferred) | 2026-05-11 |
 | 6. Auto-provisioning Emergency Pod | 10/11 | In Progress (autonomous plans done; 06-11 HUMAN-UAT blocking + VERIFICATION pending) | - |
 | 7. Observability — Dashboard & Alerting | 0/9 | Planned (9 plans, 5 waves) | - |
-| 8. Client Integration — ConverseAI + Chat Ifix | 0/? | Not started | - |
+| 8. Client Integration — ConverseAI + Chat Ifix | 0/4 | Planned (4 plans, 3 waves) | - |
 | 9. Client Integration — Sensitive Tenants | 0/? | Not started | - |
 | 10. Production Hardening & GA | 0/? | Not started | - |
 
@@ -264,3 +269,4 @@ Plans:
 *Phase 1 plans created: 2026-04-17*
 *Phase 6 plans created: 2026-05-13 (11 plans)*
 *Phase 7 plans created: 2026-05-14 (9 plans, 5 waves)*
+*Phase 8 plans created: 2026-05-14 (4 plans, 3 waves)*
