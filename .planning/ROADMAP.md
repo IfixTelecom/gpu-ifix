@@ -176,7 +176,7 @@ Plans:
 - [x] 07-06-PLAN.md — Gateway wiring: main.go constructs alert clients from config + spawns alerter goroutine early + mounts /admin/metrics + /admin/audit + FSM transitions emit fsm_transition audit rows (OBS-01,04,05,07)
 - [x] 07-07-PLAN.md — Dashboard scaffold: greenfield dashboard/ Next.js 15 + shadcn radix-nova + standalone Better Auth (emailAndPassword) + server-side gateway proxy + unauthed→/login + Dockerfile + build-dashboard.yml + docker-compose service (OBS-03)
 - [x] 07-08-PLAN.md — Dashboard UI: React Query 5-10s polling + (dashboard) layout + sidebar + critical banner + KPI cards + Recharts latency chart + FSM panel + tenant/audit tables + Overview/Tenants/Incidents pages + human-verify checkpoint (OBS-03)
-- [ ] 07-09-PLAN.md — HUMAN-UAT: RUNBOOK-OBSERVABILITY-ALERTING.md + 07-HUMAN-UAT.md (SC-2 live WhatsApp/email/ClickUp, SC-3 live dedup, SC-5 Prometheus cardinality, SC-6 Sentry redaction) + sign-off (OBS-02,04,05,08)
+- [x] 07-09-PLAN.md — HUMAN-UAT: RUNBOOK-OBSERVABILITY-ALERTING.md + 07-HUMAN-UAT.md (SC-2 live WhatsApp/email/ClickUp, SC-3 live dedup, SC-5 Prometheus cardinality, SC-6 Sentry redaction) + sign-off (OBS-02,04,05,08)
 **Research hint:** yes (confirm Ifix WhatsApp provider — Evolution API vs Z-API vs Chatwoot; confirm Better Auth vs SSO for dashboard)
 **UI hint:** yes
 
