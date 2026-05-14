@@ -40,6 +40,14 @@ All color tokens below reference the radix-nova `.dark` OKLCH values verified in
 
 ---
 
+## Visual Hierarchy
+
+**Primary focal point:** the critical-event banner (sticky top, full-width, `--destructive` red) when an active critical alert exists; otherwise the KPI display values (28px semibold, top KPI row) are the dominant element the operator's eye lands on first.
+
+Secondary tier: the FSM-state panel and per-tenant metrics table. Tertiary tier: charts and the audit-log panel. The single accent-colored primary action button per view is the only deliberate accent draw within an otherwise neutral/dark surface.
+
+---
+
 ## Spacing Scale
 
 Declared values (multiples of 4 — matches shadcn radix-nova `--radius` system and Tailwind defaults):
@@ -54,9 +62,16 @@ Declared values (multiples of 4 — matches shadcn radix-nova `--radius` system 
 | 2xl | 48px | Page top padding below the global banner/header |
 | 3xl | 64px | Reserved — not expected on a density-first ops screen |
 
-Exceptions:
-- **Data table rows:** 36px row height (compact density) — derived as 8px vertical padding × 2 + ~20px line. Permitted exception so the audit-log and per-tenant tables stay scannable.
-- **Critical-event banner:** 44px min height — fixed sticky bar; height set by 12px vertical padding + 20px line, rounds to a 44px touch/scan target.
+Exceptions: none — the spacing scale contains only the standard token set {4, 8, 16, 24, 32, 48, 64}.
+
+### Component Dimensions (fixed component heights — NOT spacing-scale tokens)
+
+The following are fixed heights of specific components, not spacing values. They are documented here explicitly so they are never mistaken for spacing tokens. Internal padding of these components still uses the spacing scale above.
+
+| Component | Fixed height | Justification |
+|-----------|--------------|---------------|
+| Data table row | 36px | Deliberate compact-table row height so the audit-log and per-tenant tables stay scannable. Built from `sm` (8px) vertical padding × 2 + a 20px text line. A 32px row would force padding below `sm` and break cell legibility on a dense ops screen; a 48px row wastes vertical space and reduces the number of visible rows. This is a component constraint, not a spacing token. |
+| Critical-event banner | 44px min height | Fixed sticky-bar minimum height — internal padding uses `sm` (8px), but the banner is pinned to a 44px minimum so the persistent status target is a consistent size regardless of copy length. This is a component constraint, not a spacing token. |
 
 ---
 
@@ -87,7 +102,7 @@ radix-nova `.dark` OKLCH tokens, verified in converseai-v4 `globals.css`.
 | Destructive | `oklch(0.704 0.191 22.216)` — `--destructive` (red) | Critical-event banner background, critical alert badges, "GPU down" / `FAILED_OVER` FSM state, error-rate KPI when over threshold |
 
 Accent reserved for:
-- The single primary action button per view (e.g. **Acknowledge incident** on the banner, **Apply** on a date-range filter)
+- The single primary action button per view (e.g. **Reconhecer incidente** on the banner, **Aplicar período** on a date-range filter)
 - The active sidebar nav item
 - Focus rings on interactive controls
 - The "healthy" / `HEALTHY` FSM state indicator and the in-SLO latency state
@@ -116,6 +131,7 @@ Audience: ~4 internal Ifix operators. Copy is **operational and direct** — no 
 | Element | Copy |
 |---------|------|
 | Primary CTA | **Reconhecer incidente** — on the critical-event banner; acknowledges the active critical alert and collapses the banner (does not resolve the underlying condition) |
+| Date-range confirm button | **Aplicar período** — confirms the selected `from`/`to` range on the cost/usage date-range filter (the component-inventory `button` block; pt-BR, not "Apply") |
 | Empty state heading | **Sem dados no período** |
 | Empty state body | Nenhuma requisição registrada para este tenant no intervalo selecionado. Ajuste o período ou confirme que o tenant está roteando pelo gateway. |
 | Error state | Não foi possível carregar as métricas do gateway. Verifique se o gateway está no ar e se a admin-key está válida, depois use **Tentar novamente**. |
@@ -144,7 +160,7 @@ shadcn `radix-nova` blocks the planner/executor will install for `dashboard/`. A
 | `table` | Per-tenant metrics table, audit-log / incident-history table |
 | `badge` | FSM state pills, severity tiers, `data_class` (normal/sensitive), tenant mode (24/7 / peak) |
 | `alert` | The critical/warning event banner (sticky, top of layout) |
-| `button` | Primary CTA, date-range "Apply", "Tentar novamente" retry |
+| `button` | Primary CTA, date-range confirm button ("Aplicar período"), "Tentar novamente" retry |
 | `tabs` | Switching between dashboard views (Overview / Tenants / Incident History) if a tabbed layout is chosen |
 | `select` + `popover` + `calendar` | Date-range filter for cost/usage views (`from`/`to` map to `/admin/usage` query params) |
 | `sidebar` | Left nav (radix-nova ships dedicated `--sidebar-*` tokens) |
