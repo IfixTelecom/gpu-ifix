@@ -169,20 +169,40 @@ export interface UsageResponse {
   }>;
 }
 
-/** Error envelope surfaced by the proxy or the gateway. */
+/**
+ * Error envelope surfaced by the proxy or the gateway.
+ *
+ * `message` carries the SPECIFIC server-side cause when one is available
+ * (WR-06) — the proxy emits `configuration_error` (500) /
+ * `upstream_unreachable` (502) envelopes, and the gateway admin handlers
+ * emit OpenAI-style `{error:{type,code,message}}` envelopes. `type` is
+ * the machine-readable discriminator (e.g. "upstream_unreachable",
+ * "invalid_request_error") so a page can tell a down gateway from a bad
+ * key from an unconfigured proxy.
+ */
 export class GatewayError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly type: string | null;
+  constructor(status: number, message: string, type: string | null = null) {
     super(message);
     this.name = "GatewayError";
     this.status = status;
+    this.type = type;
   }
+}
+
+/** The error-envelope shape both the proxy and the gateway emit. */
+interface ErrorEnvelope {
+  error?: { message?: string; type?: string };
 }
 
 /**
  * Internal fetch helper — always hits the `/api/gateway/*` proxy, never the
- * gateway directly. Throws GatewayError on non-2xx so callers (and the
- * UI-SPEC error state) can surface "Não foi possível carregar as métricas…".
+ * gateway directly. Throws GatewayError on non-2xx; WR-06: it parses the
+ * JSON error envelope and surfaces the SPECIFIC `message`/`type` from the
+ * proxy or gateway instead of a hardcoded generic string, so the operator
+ * sees the actual diagnostic (bad key vs down gateway vs unconfigured
+ * proxy) — the whole point of an incident-triage tool.
  */
 async function proxyGet<T>(path: string, query?: Record<string, string>): Promise<T> {
   const qs = query ? `?${new URLSearchParams(query).toString()}` : "";
@@ -193,10 +213,18 @@ async function proxyGet<T>(path: string, query?: Record<string, string>): Promis
   });
 
   if (!res.ok) {
-    throw new GatewayError(
-      res.status,
-      "Não foi possível carregar as métricas do gateway.",
-    );
+    // Try to surface the structured envelope; fall back to the generic
+    // string only when the body is missing or not the expected shape.
+    let message = "Não foi possível carregar as métricas do gateway.";
+    let type: string | null = null;
+    try {
+      const body = (await res.json()) as ErrorEnvelope;
+      if (body.error?.message) message = body.error.message;
+      if (body.error?.type) type = body.error.type;
+    } catch {
+      // Non-JSON or empty body — keep the generic fallback message.
+    }
+    throw new GatewayError(res.status, message, type);
   }
 
   return (await res.json()) as T;

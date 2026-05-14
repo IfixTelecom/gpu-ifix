@@ -41,7 +41,14 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBrl } from "@/lib/format";
-import { fetchMetrics, fetchUsage } from "@/lib/gateway";
+import { fetchMetrics, fetchUsage, GatewayError } from "@/lib/gateway";
+
+/** WR-06: the specific proxy/gateway cause, or the generic fallback. */
+function errorMessage(error: unknown): string {
+  return error instanceof GatewayError
+    ? error.message
+    : "Não foi possível carregar as métricas do gateway.";
+}
 
 /** YYYY-MM-DD — the `/admin/usage` from/to query format. */
 function isoDate(d: Date): string {
@@ -107,9 +114,9 @@ export default function TenantsPage() {
           ) : metricsQuery.isError ? (
             <div className="flex flex-col items-center gap-4 py-8 text-center">
               <p className="text-[14px] text-muted-foreground">
-                Não foi possível carregar as métricas do gateway. Verifique se
-                o gateway está no ar e se a admin-key está válida, depois use
-                Tentar novamente.
+                {errorMessage(metricsQuery.error)} Verifique se o gateway está
+                no ar e se a admin-key está válida, depois use Tentar
+                novamente.
               </p>
               <Button
                 size="sm"
@@ -180,9 +187,8 @@ export default function TenantsPage() {
           ) : usageQuery.isError ? (
             <div className="flex flex-col items-center gap-4 py-4 text-center">
               <p className="text-[14px] text-muted-foreground">
-                Não foi possível carregar as métricas do gateway. Verifique se
-                o gateway está no ar e se a admin-key está válida, depois use
-                Tentar novamente.
+                {errorMessage(usageQuery.error)} Verifique se o gateway está no
+                ar e se a admin-key está válida, depois use Tentar novamente.
               </p>
               <Button
                 size="sm"

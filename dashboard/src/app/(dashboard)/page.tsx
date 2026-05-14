@@ -36,10 +36,15 @@ import {
   formatMs,
   latencyTier,
 } from "@/lib/format";
-import { fetchMetrics, latencyByRoute, totalInflight } from "@/lib/gateway";
+import {
+  fetchMetrics,
+  GatewayError,
+  latencyByRoute,
+  totalInflight,
+} from "@/lib/gateway";
 
 export default function OverviewPage() {
-  const { data, isLoading, isError, dataUpdatedAt } = useQuery({
+  const { data, isLoading, isError, error, dataUpdatedAt } = useQuery({
     queryKey: ["metrics"],
     queryFn: () => fetchMetrics(),
   });
@@ -63,9 +68,13 @@ export default function OverviewPage() {
       ) : isError ? (
         <Card>
           <CardContent className="py-8 text-center text-[14px] text-muted-foreground">
-            Não foi possível carregar as métricas do gateway. Verifique se o
-            gateway está no ar e se a admin-key está válida, depois recarregue a
-            página.
+            {/* WR-06: surface the specific proxy/gateway cause when one is
+                available, not a hardcoded generic string. */}
+            {error instanceof GatewayError
+              ? error.message
+              : "Não foi possível carregar as métricas do gateway."}{" "}
+            Verifique se o gateway está no ar e se a admin-key está válida,
+            depois recarregue a página.
           </CardContent>
         </Card>
       ) : !data || data.tenants.length === 0 ? (

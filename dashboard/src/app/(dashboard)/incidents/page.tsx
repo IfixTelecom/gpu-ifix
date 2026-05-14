@@ -24,14 +24,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { fetchAudit } from "@/lib/gateway";
+import { fetchAudit, GatewayError } from "@/lib/gateway";
 
 const PAGE_SIZE = 50;
 
 export default function IncidentsPage() {
   const [offset, setOffset] = useState(0);
 
-  const { data, isLoading, isError, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["audit", offset],
     queryFn: () => fetchAudit(PAGE_SIZE, offset),
   });
@@ -57,9 +57,12 @@ export default function IncidentsPage() {
           ) : isError ? (
             <div className="flex flex-col items-center gap-4 py-8 text-center">
               <p className="text-[14px] text-muted-foreground">
-                Não foi possível carregar as métricas do gateway. Verifique se
-                o gateway está no ar e se a admin-key está válida, depois use
-                Tentar novamente.
+                {/* WR-06: show the specific proxy/gateway cause. */}
+                {error instanceof GatewayError
+                  ? error.message
+                  : "Não foi possível carregar as métricas do gateway."}{" "}
+                Verifique se o gateway está no ar e se a admin-key está válida,
+                depois use Tentar novamente.
               </p>
               <Button size="sm" variant="outline" onClick={() => refetch()}>
                 Tentar novamente
