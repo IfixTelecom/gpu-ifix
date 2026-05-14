@@ -37,8 +37,10 @@ var (
 )
 
 // TestMain brings up one shared Postgres + one shared Redis for the
-// whole integration_test package. Tests rebuild a FRESH schema between
-// cases via db.Down + db.Up (cheap) rather than tearing containers down.
+// whole integration_test package. The containers are reused across all
+// test cases; per-test isolation is provided by freshSchema, which
+// re-applies db.Up and TRUNCATEs the data tables (it does NOT tear the
+// schema down via db.Down — db.Up is idempotent).
 func TestMain(m *testing.M) {
 	setupOnce.Do(func() { setupErr = setupContainers(context.Background()) })
 	if setupErr != nil {
@@ -159,10 +161,21 @@ func freshSchema(t *testing.T, ctx context.Context) (*pgxpool.Pool, *redis.Clien
 	// the child partitions automatically. Tenants are TRUNCATE'd too so
 	// cross-test contamination (prior tests seeding "leak-tenant",
 	// "concurrent-tenant", etc.) doesn't bleed into tenant-count assertions.
+	//
+	// emergency_lifecycles MUST be truncated between cases: the Postgres
+	// container is shared package-wide, so lifecycle rows written by one
+	// test would otherwise leak into the next, breaking absolute-count
+	// asserts and colliding with the emergency_live_singleton partial
+	// unique index (which would abort FSM transitions). RESTART IDENTITY
+	// resets its BIGSERIAL id sequence so ids stay deterministic per test.
 	for _, tbl := range []string{"api_keys", "audit_log", "audit_log_content", "usage_counters", "tenants"} {
 		if _, err := pool.Exec(ctx, "TRUNCATE ai_gateway."+tbl+" CASCADE"); err != nil {
 			t.Fatalf("truncate %s: %v", tbl, err)
 		}
+	}
+	if _, err := pool.Exec(ctx,
+		"TRUNCATE ai_gateway.emergency_lifecycles RESTART IDENTITY CASCADE"); err != nil {
+		t.Fatalf("truncate emergency_lifecycles: %v", err)
 	}
 	// Re-seed the default converseai tenant that the 0001 migration created.
 	if _, err := pool.Exec(ctx,
