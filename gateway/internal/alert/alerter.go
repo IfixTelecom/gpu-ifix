@@ -172,6 +172,18 @@ func (a *Alerter) Run(ctx context.Context) {
 // consume loop, so it must return promptly: every branch is either a
 // log + return or a non-blocking enqueue.
 func (a *Alerter) handle(ctx context.Context, channelName string, payload []byte) {
+	a.handleEvent(ctx, channelName, payload, false)
+}
+
+// handleEvent is the body of handle. bypassDedup, when true, skips the
+// dedup gate entirely and always fans out — used by ReconcileBoot for an
+// active critical incident found at startup (WR-03): a gateway crash
+// DURING an unacknowledged incident is the single most important moment
+// to re-surface the page, and the live alerter's still-set 5-minute
+// dedup key would otherwise silently suppress it. A duplicate page is an
+// annoyance; a silenced active incident after a crash is an outage
+// nobody is looking at.
+func (a *Alerter) handleEvent(ctx context.Context, channelName string, payload []byte, bypassDedup bool) {
 	sev, msg, err := severityFor(channelName, payload)
 	if err != nil {
 		// Malformed (or hostile) payload — log a WARN and move on. A bad
@@ -187,10 +199,18 @@ func (a *Alerter) handle(ctx context.Context, channelName string, payload []byte
 	// out to zero channels anyway, but running it through the gate keeps
 	// the log line consistent and claims the fingerprint so a later
 	// promotion of the same incident to warning/critical still dedups.
-	if !dedupShouldSend(ctx, a.rdb, sev, msg.Fingerprint) {
+	//
+	// bypassDedup skips the gate: ReconcileBoot must re-page an active
+	// critical incident even when the live alerter already claimed the
+	// fingerprint before the crash (WR-03).
+	if !bypassDedup && !dedupShouldSend(ctx, a.rdb, sev, msg.Fingerprint) {
 		a.log.Info("alert deduplicated; external channels skipped",
 			"severity", string(sev), "fingerprint", msg.Fingerprint)
 		return
+	}
+	if bypassDedup {
+		a.log.Info("alert dedup gate bypassed; surfacing active incident",
+			"severity", string(sev), "fingerprint", msg.Fingerprint)
 	}
 
 	targets := channelsFor(sev)
@@ -270,19 +290,25 @@ func (a *Alerter) runWorker(ctx context.Context, name string, w *channelWorker) 
 // gap by reading the emergency FSM state mirror Hash (gw:emerg:state)
 // once at boot and, if the state is an alert-worthy one, synthesising
 // the corresponding event and pushing it through the same
-// classify → dedup → fan-out path as a live event.
+// classify → fan-out path as a live event.
 //
-// The dedup gate still applies: if the live alerter already alerted on
-// this incident within the 5-minute window, ReconcileBoot's synthetic
-// event collapses against the same fingerprint and is suppressed — so a
-// fast restart does not double-page.
+// WR-03 — dedup policy at boot is severity-dependent:
+//
+//   - critical state → BYPASS the dedup gate (always re-page). A gateway
+//     crash during an unacknowledged critical incident is precisely the
+//     moment the on-call most needs the page re-surfaced; the live
+//     alerter's still-set 5-minute dedup key would otherwise silence it.
+//     A duplicate page is strictly less bad than a silenced live outage.
+//   - warning state → the dedup gate still applies: a fast restart
+//     during a mere degraded state should not double-page the lower
+//     tier, where alert fatigue is the larger risk.
 //
 // Best-effort: a Redis error or an absent / unparseable state Hash is
 // logged and ignored — boot reconciliation must never block startup.
 // Call ReconcileBoot once, BEFORE spawning Run's goroutine ideally, but
 // after the worker goroutines exist (so the fan-out has somewhere to
 // enqueue) — in practice main.go calls it right after `go a.Run(ctx)`
-// and the small race is harmless because the dedup gate is idempotent.
+// and the small race is harmless.
 func (a *Alerter) ReconcileBoot(ctx context.Context) {
 	log := a.log.With("subsystem", "reconcile-boot")
 	if a.rdb == nil {
@@ -325,7 +351,11 @@ func (a *Alerter) ReconcileBoot(ctx context.Context) {
 		log.Warn("reconcile-boot: failed to marshal synthetic event", "err", err)
 		return
 	}
+	// WR-03: bypass the dedup gate for an active CRITICAL state so a
+	// crash-during-incident always re-pages; keep the gate for warning
+	// states so a fast restart does not double-page the lower tier.
+	bypassDedup := emergCriticalStates[stateName]
 	log.Info("reconcile-boot: surfacing alert for active incident found at startup",
-		"state", stateName)
-	a.handle(ctx, redisx.EmergEventsChannel, payload)
+		"state", stateName, "bypass_dedup", bypassDedup)
+	a.handleEvent(ctx, redisx.EmergEventsChannel, payload, bypassDedup)
 }
