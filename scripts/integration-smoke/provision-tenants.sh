@@ -1,19 +1,35 @@
 #!/usr/bin/env bash
-# scripts/integration-smoke/provision-tenants.sh — idempotent Phase-8 tenant seed.
+# scripts/integration-smoke/provision-tenants.sh — idempotent Phase-8 + Phase-9
+# tenant seed.
 #
-# Wraps the compiled `gatewayctl` CLI (tenant create / key create /
-# admin-key create) to provision the two Phase-8 client tenants in the
-# gateway DB: `converseai` (covers converseai-v4 api + agents) and
-# `chat-ifix`. Both data_class=normal (08-CONTEXT.md `## Decisions`).
+# Wraps the compiled `gatewayctl` CLI (tenant create / tenant set-quota /
+# key create / admin-key create) to provision the four Phase-9 client tenants
+# in the gateway DB with a PER-TENANT data_class:
+#   - `telefonia`  — data_class=sensitive (Telefonia / NextBilling call audio
+#                    is PII; never proxied to OpenAI/OpenRouter on failover)
+#   - `cobrancas`  — data_class=sensitive (financial / collections data;
+#                    RES-08 names Cobranças sensitive)
+#   - `campanhas`  — data_class=normal    (marketing personalization, external
+#                    failover allowed)
+#   - `voice-api`  — data_class=normal    (LLM script generation; TTS stays
+#                    local CPU)
+# (09-CONTEXT.md `## Decisions`). This implements INT-03 (Telefonia sensitive),
+# INT-04 (Cobranças + Campanhas), INT-05 (voice-api).
 #
 # Idempotency:
 #   - `gatewayctl tenant create` is idempotent here: a "slug already exists"
 #     stderr + exit 1 is treated as success (the tenant is already
 #     provisioned) — the script continues.
+#   - `gatewayctl tenant set-quota` is an idempotent UPDATE: it always runs
+#     (NOT gated behind --mint-keys), and a re-run simply re-applies the same
+#     quota. There is NO idempotency-OK case for its failure — `set-quota`
+#     exiting 1 means `tenant %q not found`, which can only mean tenant-create
+#     failed, so any non-zero exit is FATAL.
 #   - `gatewayctl key create` / `admin-key create` are NOT idempotent: every
 #     call mints a NEW row. The key-mint steps are therefore gated behind the
 #     explicit `--mint-keys` opt-in flag. Run the script once WITHOUT it to
-#     create the tenants, then once WITH `--mint-keys` to mint the keys.
+#     create the tenants + apply the quotas, then once WITH `--mint-keys` to
+#     mint the keys.
 #
 # Secrets: raw API keys are printed to stdout EXACTLY ONCE via a final
 # instructions block. They are NEVER passed to log() (which writes to stderr,
@@ -31,7 +47,7 @@
 #                      components themselves MUST NOT contain spaces (use a
 #                      wrapper script on PATH if gatewayctl lives under a
 #                      space-containing path).
-#   --mint-keys        opt-in: also mint the 2 tenant API keys + the dashboard
+#   --mint-keys        opt-in: also mint the 4 tenant API keys + the dashboard
 #                      admin key (NON-idempotent — pass exactly once)
 #   --dry-run          print the gatewayctl commands that WOULD run, execute
 #                      nothing, touch no DB
@@ -79,12 +95,25 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     || { log "missing gatewayctl executable: $GATEWAYCTL_BIN (pass --gatewayctl PATH)"; exit 1; }
 fi
 
-# --- tenant model (08-CONTEXT.md `## Decisions`) --------------------------
-# Exactly two Phase-8 tenants, both data_class=normal.
-#   slug | display name
-TENANT_SLUGS=("converseai" "chat-ifix")
-TENANT_NAMES=("ConverseAI v4" "Chat Ifix")
-DATA_CLASS="normal"
+# --- tenant model (09-CONTEXT.md `## Decisions`) --------------------------
+# Exactly four Phase-9 tenants with a PER-TENANT data_class. The parallel
+# TENANT_DATA_CLASS array carries the data_class by index — `tenant create`
+# itself takes no --data-class flag (data_class is carried by the KEY, not the
+# tenant), so the array is consumed in the key-mint step below.
+#   slug | display name | data_class
+TENANT_SLUGS=("telefonia" "cobrancas" "campanhas" "voice-api")
+TENANT_NAMES=("Telefonia / NextBilling" "Cobranças" "Campanhas" "voice-api")
+TENANT_DATA_CLASS=("sensitive" "sensitive" "normal" "normal")
+
+# --- per-tenant quota model (09-CONTEXT.md SC2) ---------------------------
+# Only cobrancas + campanhas get quotas. Starting values are conservative
+# per-tenant ceilings (a daily LLM-token budget + a requests-per-minute cap);
+# audio/embed/monthly/rps flags are intentionally left off so they stay at the
+# `-1` = unchanged sentinel. set-quota is an idempotent UPDATE, so re-running
+# the script simply re-applies these.
+QUOTA_TENANTS=("cobrancas" "campanhas")
+QUOTA_DAILY_TOKENS=("2000000" "5000000")
+QUOTA_RPM=("120" "300")
 
 # --- helpers --------------------------------------------------------------
 # run_gatewayctl: echoes the command under --dry-run, otherwise executes it.
@@ -104,8 +133,8 @@ run_gatewayctl() {
   set -e
 }
 
-# --- 1) idempotent tenant create (always runs, both tenants) --------------
-log "provisioning ${#TENANT_SLUGS[@]} tenants (data_class=${DATA_CLASS})"
+# --- 1) idempotent tenant create (always runs, all four tenants) ----------
+log "provisioning ${#TENANT_SLUGS[@]} tenants (per-tenant data_class)"
 for i in "${!TENANT_SLUGS[@]}"; do
   slug="${TENANT_SLUGS[$i]}"
   name="${TENANT_NAMES[$i]}"
@@ -129,14 +158,38 @@ for i in "${!TENANT_SLUGS[@]}"; do
   fi
 done
 
-# --- 2) guarded key mint (only under --mint-keys) -------------------------
+# --- 2) per-tenant quotas (SC2 — ALWAYS runs, NOT gated by --mint-keys) ----
+# `tenant set-quota` is an idempotent UPDATE — it is safe (and required) to run
+# on every invocation, including a re-run without --mint-keys. Unlike
+# tenant-create there is NO idempotency-OK failure case: set-quota exits 1 with
+# `tenant %q not found`, which can only mean the tenant-create step above
+# failed. Treat ANY non-zero exit as FATAL so a half-provisioned tenant halts
+# the script instead of silently shipping quota-unbounded (threat T-09-02).
+log "applying per-tenant quotas to ${#QUOTA_TENANTS[@]} tenants (cobrancas, campanhas)"
+for i in "${!QUOTA_TENANTS[@]}"; do
+  qslug="${QUOTA_TENANTS[$i]}"
+  qtokens="${QUOTA_DAILY_TOKENS[$i]}"
+  qrpm="${QUOTA_RPM[$i]}"
+  run_gatewayctl tenant set-quota --tenant "$qslug" --daily-tokens "$qtokens" --rpm "$qrpm"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    continue
+  fi
+  if [[ "$GW_RC" -ne 0 ]]; then
+    log "tenant set-quota ($qslug) failed (exit $GW_RC): $GW_OUT"
+    log "a non-zero set-quota exit means the tenant does not exist — tenant-create failed; halting."
+    exit 1
+  fi
+  log "tenant '$qslug' quota applied (daily-tokens=$qtokens rpm=$qrpm)"
+done
+
+# --- 3) guarded key mint (only under --mint-keys) -------------------------
 if [[ "$MINT_KEYS" -eq 0 ]]; then
   log "skipping key mint — 'key create' / 'admin-key create' are NOT idempotent."
-  log "re-run ONCE with --mint-keys to mint the tenant keys + dashboard admin key."
+  log "re-run ONCE with --mint-keys to mint the 4 tenant keys + dashboard admin key."
   exit 0
 fi
 
-log "minting tenant API keys + dashboard admin key (--mint-keys)"
+log "minting 4 tenant API keys + dashboard admin key (--mint-keys)"
 
 # parse_key: extracts the `key=<raw>` value from a gatewayctl mint block.
 # gatewayctl emits a fixed block where `key=` appears on EXACTLY ONE line
@@ -159,30 +212,40 @@ parse_id() {
   printf '%s\n' "$1" | grep '^id=' | head -n1 | cut -d= -f2-
 }
 
-CONVERSEAI_KEY=""
-CHAT_IFIX_KEY=""
+# mint_tenant_key: mints one tenant key with the given per-tenant data_class
+# and echoes the raw key to stdout (caller captures it). The raw key is NEVER
+# passed to log() — only the non-secret id= is logged.
+mint_tenant_key() {
+  local slug="$1" data_class="$2"
+  run_gatewayctl key create --tenant "$slug" --data-class "$data_class"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  [[ "$GW_RC" -eq 0 ]] || { log "key create ($slug) failed (exit $GW_RC): $GW_OUT"; exit 1; }
+  local k
+  k="$(parse_key "$GW_OUT")"
+  [[ -n "$k" ]] || { log "key create ($slug): no key= line in output"; exit 1; }
+  log "$slug tenant key minted (data_class=$data_class id=$(parse_id "$GW_OUT"))"
+  printf '%s' "$k"
+}
+
+TELEFONIA_KEY=""
+COBRANCAS_KEY=""
+CAMPANHAS_KEY=""
+VOICE_API_KEY=""
 ADMIN_KEY=""
 
-# converseai tenant key
-run_gatewayctl key create --tenant converseai --data-class "$DATA_CLASS"
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  [[ "$GW_RC" -eq 0 ]] || { log "key create (converseai) failed (exit $GW_RC): $GW_OUT"; exit 1; }
-  CONVERSEAI_KEY="$(parse_key "$GW_OUT")"
-  [[ -n "$CONVERSEAI_KEY" ]] || { log "key create (converseai): no key= line in output"; exit 1; }
-  log "converseai tenant key minted (id=$(parse_id "$GW_OUT"))"
-fi
-
-# chat-ifix tenant key
-run_gatewayctl key create --tenant chat-ifix --data-class "$DATA_CLASS"
-if [[ "$DRY_RUN" -eq 0 ]]; then
-  [[ "$GW_RC" -eq 0 ]] || { log "key create (chat-ifix) failed (exit $GW_RC): $GW_OUT"; exit 1; }
-  CHAT_IFIX_KEY="$(parse_key "$GW_OUT")"
-  [[ -n "$CHAT_IFIX_KEY" ]] || { log "key create (chat-ifix): no key= line in output"; exit 1; }
-  log "chat-ifix tenant key minted (id=$(parse_id "$GW_OUT"))"
-fi
+# telefonia tenant key (data_class=sensitive)
+TELEFONIA_KEY="$(mint_tenant_key telefonia sensitive)"
+# cobrancas tenant key (data_class=sensitive)
+COBRANCAS_KEY="$(mint_tenant_key cobrancas sensitive)"
+# campanhas tenant key (data_class=normal)
+CAMPANHAS_KEY="$(mint_tenant_key campanhas normal)"
+# voice-api tenant key (data_class=normal)
+VOICE_API_KEY="$(mint_tenant_key voice-api normal)"
 
 # dashboard admin key
-run_gatewayctl admin-key create --label "phase-8-dashboard"
+run_gatewayctl admin-key create --label "phase-9-sensitive"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   [[ "$GW_RC" -eq 0 ]] || { log "admin-key create failed (exit $GW_RC): $GW_OUT"; exit 1; }
   ADMIN_KEY="$(parse_key "$GW_OUT")"
@@ -198,23 +261,37 @@ fi
 # --- final instructions: surface raw keys to stdout EXACTLY ONCE ----------
 # These values are intentionally printed to stdout (not log()) so they are
 # never written to a stderr-redirected log file. They are not re-derivable.
+# The two sensitive-tenant keys (telefonia, cobrancas) gate LGPD-relevant
+# call-audio + financial data — copy them straight into Portainer, never commit.
 cat <<EOF
 
 ====================================================================
-  Tenant keys minted. Copy these into the respective Portainer stack
-  env vars NOW — they are shown ONCE and are NEVER re-derivable.
-  Do NOT commit them to git.
+  Tenant keys minted. Copy these into the respective client repo's
+  Portainer stack env vars NOW — they are shown ONCE and are NEVER
+  re-derivable. Do NOT commit them to git.
 ====================================================================
 
-  converseai tenant key  (converseai-v4 api + agents)
-    -> OPENAI_API_KEY / gateway base_url key in stack 'converseai-v4-dev'
-    ${CONVERSEAI_KEY}
+  telefonia tenant key   (data_class=sensitive — call-audio Whisper STT)
+    -> client repo: fallback-register-ramais-nextbilling
+       gateway api_key env var in that stack
+    ${TELEFONIA_KEY}
 
-  chat-ifix tenant key   (campanhas-chatifix backend — WhatsApp audio STT)
-    -> gateway api_key env var in the chat-ifix backend stack
-    ${CHAT_IFIX_KEY}
+  cobrancas tenant key   (data_class=sensitive — LLM personalization + embeds)
+    -> client repo: cobrancas-api
+       gateway api_key env var in that stack
+    ${COBRANCAS_KEY}
 
-  dashboard admin key    (label: phase-8-dashboard)
+  campanhas tenant key   (data_class=normal — LLM + embeddings)
+    -> client repo: campanhas-chatifix
+       gateway api_key env var in that stack
+    ${CAMPANHAS_KEY}
+
+  voice-api tenant key   (data_class=normal — LLM script generation)
+    -> client repo: voice-api
+       gateway api_key env var in that stack
+    ${VOICE_API_KEY}
+
+  dashboard admin key    (label: phase-9-sensitive)
     -> X-Admin-Key for the Phase 7 observability dashboard
     ${ADMIN_KEY}
 
@@ -224,4 +301,4 @@ cat <<EOF
 ====================================================================
 EOF
 
-log "done — 2 tenant keys + 1 admin key minted and surfaced above"
+log "done — 4 tenant keys + 1 admin key minted and surfaced above"
