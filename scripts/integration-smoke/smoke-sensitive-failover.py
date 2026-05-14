@@ -674,7 +674,13 @@ async def main_async(cfg: Config) -> int:
         "status_code": fail_closed["status_code"],
         "ok": audit["ok"],
         "audit_log_row_found": audit["audit_log_row_found"],
-        "audit_log_content_rows": max(audit["audit_log_content_rows"], 0),
+        # WR-01: write the RAW value. -1 is the "audit-DB query did not run"
+        # sentinel — do NOT collapse it to 0 with max(), because 0 is the PASS
+        # value ("no sensitive content persisted") and a reader would see a
+        # failed-query run as clean. The schema allows minimum: -1 for exactly
+        # this sentinel; the gate logic (audit["ok"]) checks == 0 on the raw
+        # value so -1 never passes the gate.
+        "audit_log_content_rows": audit["audit_log_content_rows"],
     }
     if not audit["ok"] and audit.get("error"):
         audit_decision["raw_error_body"] = audit["error"]
@@ -762,7 +768,9 @@ def _write_unevaluated_report(
         "audit_decision": {
             **unevaluated_check,
             "audit_log_row_found": False,
-            "audit_log_content_rows": 0,
+            # WR-01: -1 sentinel — the audit-DB query never ran in an
+            # unevaluated report. NOT 0, which is the PASS value.
+            "audit_log_content_rows": -1,
         },
         "errors": errors,
         "gates": {

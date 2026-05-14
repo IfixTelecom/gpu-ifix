@@ -71,7 +71,11 @@
         "status_code": { "type": "integer" },
         "ok": { "type": "boolean" },
         "audit_log_row_found": { "type": "boolean" },
-        "audit_log_content_rows": { "type": "integer", "minimum": 0 },
+        "audit_log_content_rows": {
+          "type": "integer",
+          "minimum": -1,
+          "description": "COUNT(*) of ai_gateway.audit_log_content rows for the request_id. 0 = PASS (no sensitive content persisted). -1 = sentinel meaning the audit-DB query did not complete (do not read as a clean result; check `ok` + `raw_error_body`)."
+        },
         "raw_error_body": { "type": "string" }
       },
       "additionalProperties": false
