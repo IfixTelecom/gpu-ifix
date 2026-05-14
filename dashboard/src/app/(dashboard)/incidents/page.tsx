@@ -67,10 +67,9 @@ export default function IncidentsPage() {
             </div>
           ) : (
             <AuditTable
-              rows={data?.rows ?? []}
+              rows={data?.items ?? []}
               limit={data?.limit ?? PAGE_SIZE}
               offset={data?.offset ?? offset}
-              total={data?.total ?? 0}
               onPrev={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
               onNext={() => setOffset((o) => o + PAGE_SIZE)}
             />

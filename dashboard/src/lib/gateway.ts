@@ -16,6 +16,12 @@
 const GATEWAY_PROXY_BASE = "/api/gateway";
 
 // --- /admin/metrics (OBS-01) ----------------------------------------------
+//
+// These interfaces mirror the Go handler `admin.MetricsResponse` /
+// `admin.TenantLatencyRow` / `admin.InflightRow` in
+// gateway/internal/admin/metrics.go FIELD-FOR-FIELD. The Go handler is the
+// source of truth — it is tested and merged. Do not add fields the handler
+// does not emit.
 
 /** Per-tenant + per-route latency percentiles and error rate. */
 export interface TenantMetricRow {
@@ -28,7 +34,25 @@ export interface TenantMetricRow {
   error_rate: number;
 }
 
-/** Latency keyed by a single dimension (route or upstream). */
+/** One upstream's current in-flight request count. */
+export interface InflightRow {
+  upstream: string;
+  inflight: number;
+}
+
+/**
+ * `/admin/metrics` JSON — per-tenant percentiles, per-upstream inflight
+ * counts, and the current failover FSM state. Mirrors
+ * `admin.MetricsResponse` in gateway/internal/admin/metrics.go.
+ */
+export interface MetricsResponse {
+  window: string;
+  fsm_state: string;
+  tenants: TenantMetricRow[];
+  inflight: InflightRow[];
+}
+
+/** Latency keyed by a single dimension (e.g. route). */
 export interface LatencyRow {
   key: string;
   p50: number;
@@ -37,37 +61,70 @@ export interface LatencyRow {
 }
 
 /**
- * `/admin/metrics` JSON — per-tenant percentiles, per-route + per-upstream
- * latency, inflight count, and the current failover FSM state.
+ * Derive per-route latency rows from the per-(tenant,route) percentile
+ * rows the gateway emits. The gateway's `/admin/metrics` does NOT ship a
+ * `by_route` aggregate, so the dashboard collapses the tenant rows here:
+ * for each route, take the worst (max) percentile across tenants — the
+ * latency chart is an at-a-glance SLO view, so the worst case is the
+ * honest signal.
  */
-export interface MetricsResponse {
-  window: string;
-  generated_at: string;
-  tenants: TenantMetricRow[];
-  by_route: LatencyRow[];
-  by_upstream: LatencyRow[];
-  inflight: number;
-  fsm_state: string;
+export function latencyByRoute(tenants: TenantMetricRow[]): LatencyRow[] {
+  const byRoute = new Map<string, LatencyRow>();
+  for (const t of tenants) {
+    const existing = byRoute.get(t.route);
+    if (existing) {
+      existing.p50 = Math.max(existing.p50, t.p50);
+      existing.p95 = Math.max(existing.p95, t.p95);
+      existing.p99 = Math.max(existing.p99, t.p99);
+    } else {
+      byRoute.set(t.route, {
+        key: t.route,
+        p50: t.p50,
+        p95: t.p95,
+        p99: t.p99,
+      });
+    }
+  }
+  return Array.from(byRoute.values());
+}
+
+/** Total in-flight requests across every upstream. */
+export function totalInflight(rows: InflightRow[]): number {
+  return rows.reduce((sum, r) => sum + r.inflight, 0);
 }
 
 // --- /admin/audit (OBS-07) ------------------------------------------------
+//
+// These interfaces mirror the Go handler `admin.AuditResponse` /
+// `admin.AuditRow` in gateway/internal/admin/audit.go FIELD-FOR-FIELD.
+// Nullable Postgres columns (upstream, error_code, event_kind, reason) are
+// rendered as JSON null by the handler — typed `string | null` here.
 
-/** One audit_log state-change row. */
+/** One audit_log state-change row — mirrors `admin.AuditRow`. */
 export interface AuditRow {
-  id: string;
   ts: string;
-  event_kind: string;
-  tenant_id: string | null;
-  actor: string | null;
-  detail: Record<string, unknown> | null;
+  request_id: string;
+  tenant_id: string;
+  route: string;
+  method: string;
+  upstream: string | null;
+  status_code: number;
+  latency_ms: number;
+  error_code: string | null;
+  event_kind: string | null;
+  /** Human-readable cause of the state change (e.g. FSM transition reason). */
+  reason: string | null;
 }
 
-/** `/admin/audit` JSON — paginated state-change history, newest-first. */
+/**
+ * `/admin/audit` JSON — paginated state-change history, newest-first.
+ * Mirrors `admin.AuditResponse` — `items`, `limit`, `offset` (no `total`:
+ * the gateway handler does not run a COUNT).
+ */
 export interface AuditResponse {
-  rows: AuditRow[];
+  items: AuditRow[];
   limit: number;
   offset: number;
-  total: number;
 }
 
 // --- /admin/usage (Phase 4, existing) -------------------------------------

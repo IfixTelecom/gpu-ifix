@@ -2,13 +2,18 @@
 
 /**
  * Audit-log / incident-history table — a shadcn `table` (inside a
- * `scroll-area`) of `fetchAudit().rows`, newest-first, with a limit/offset
- * pager.
+ * `scroll-area`) of `fetchAudit().items`, newest-first, with a
+ * limit/offset pager.
  *
- * Columns follow the ACTUAL `AuditRow` shape from 07-07's gateway.ts
- * (ts, event_kind, tenant_id, actor, detail) — the binding interface — not
- * the stale column list in the plan prose (route/status_code/latency_ms are
- * not in the `/admin/audit` response; T-07-31 keeps content out of the UI).
+ * Columns follow the ACTUAL `AuditRow` shape the Go `/admin/audit` handler
+ * emits (gateway/internal/admin/audit.go) — ts, event_kind, tenant_id,
+ * route, method, status_code, latency_ms, error_code, reason. There is no
+ * `id`, no `actor`, no `detail` JSON blob (CR-01); the human-readable
+ * cause of a state change rides the dedicated `reason` column (CR-03).
+ *
+ * The pager has no server-reported `total` — the Go handler does not run
+ * a COUNT. `canNext` is inferred from whether the current page is full
+ * (a full page means there is probably another page).
  *
  * UI-SPEC §Layout Constraints — 36px fixed rows. §Copywriting — the
  * "Nenhum evento registrado no período." empty state.
@@ -29,28 +34,27 @@ import type { AuditRow } from "@/lib/gateway";
 
 export interface AuditTableProps {
   rows: AuditRow[];
-  /** Current page size + offset, plus the server-reported total. */
+  /** Current page size + offset. */
   limit: number;
   offset: number;
-  total: number;
   /** Pager callbacks — the page owns the limit/offset query state. */
   onPrev: () => void;
   onNext: () => void;
 }
 
-/** Render the `detail` JSON blob compactly (e.g. fsm from→to). */
-function formatDetail(detail: AuditRow["detail"]): string {
-  if (!detail) return "—";
-  return Object.entries(detail)
-    .map(([k, v]) => `${k}: ${String(v)}`)
-    .join(" · ");
+/**
+ * The cause cell: the `reason` column (state-change rows — e.g. the FSM
+ * transition reason) falling back to `error_code` (request rows), then a
+ * dash. The two are now distinct gateway columns (CR-03).
+ */
+function formatCause(row: AuditRow): string {
+  return row.reason ?? row.error_code ?? "—";
 }
 
 export function AuditTable({
   rows,
   limit,
   offset,
-  total,
   onPrev,
   onNext,
 }: AuditTableProps) {
@@ -65,7 +69,8 @@ export function AuditTable({
   const from = offset + 1;
   const to = offset + rows.length;
   const canPrev = offset > 0;
-  const canNext = offset + limit < total;
+  // No server `total` — a full page implies there is likely a next page.
+  const canNext = rows.length >= limit;
 
   return (
     <div className="flex flex-col gap-4">
@@ -82,32 +87,34 @@ export function AuditTable({
               <TableHead className="text-[12px] font-semibold">
                 Tenant
               </TableHead>
-              <TableHead className="text-[12px] font-semibold">Ator</TableHead>
+              <TableHead className="text-[12px] font-semibold">Rota</TableHead>
               <TableHead className="text-[12px] font-semibold">
-                Detalhe
+                Motivo
               </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {/* `/admin/audit` returns rows newest-first — rendered as-is. */}
+            {/* `/admin/audit` returns items newest-first — rendered as-is.
+                Keyed on request_id (unique, non-nil per CR-03). */}
             {rows.map((row) => (
-              <TableRow key={row.id} className="h-9">
+              <TableRow key={row.request_id} className="h-9">
                 <TableCell className="text-[14px] tabular-nums">
                   {new Date(row.ts).toLocaleString("pt-BR")}
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline" className="text-[12px] font-semibold">
-                    {row.event_kind}
+                  <Badge
+                    variant="outline"
+                    className="text-[12px] font-semibold"
+                  >
+                    {row.event_kind ?? "—"}
                   </Badge>
                 </TableCell>
-                <TableCell className="text-[14px]">
-                  {row.tenant_id ?? "—"}
+                <TableCell className="text-[14px]">{row.tenant_id}</TableCell>
+                <TableCell className="text-[14px] text-muted-foreground">
+                  {row.route}
                 </TableCell>
                 <TableCell className="text-[14px] text-muted-foreground">
-                  {row.actor ?? "—"}
-                </TableCell>
-                <TableCell className="text-[14px] text-muted-foreground">
-                  {formatDetail(row.detail)}
+                  {formatCause(row)}
                 </TableCell>
               </TableRow>
             ))}
@@ -115,10 +122,10 @@ export function AuditTable({
         </Table>
       </ScrollArea>
 
-      {/* limit/offset pager. */}
+      {/* limit/offset pager — no server total, so show the current range. */}
       <div className="flex items-center justify-between gap-4">
         <span className="text-[12px] font-semibold text-muted-foreground tabular-nums">
-          {from}–{to} de {total}
+          {from}–{to}
         </span>
         <div className="flex gap-2">
           <Button

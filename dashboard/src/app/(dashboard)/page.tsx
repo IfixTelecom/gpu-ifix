@@ -36,13 +36,19 @@ import {
   formatMs,
   latencyTier,
 } from "@/lib/format";
-import { fetchMetrics } from "@/lib/gateway";
+import { fetchMetrics, latencyByRoute, totalInflight } from "@/lib/gateway";
 
 export default function OverviewPage() {
   const { data, isLoading, isError, dataUpdatedAt } = useQuery({
     queryKey: ["metrics"],
     queryFn: () => fetchMetrics(),
   });
+
+  // The gateway emits per-(tenant,route) rows + an InflightRow[] array —
+  // it does NOT ship a `by_route` aggregate or a scalar inflight count.
+  // Derive both client-side from the real response shape.
+  const byRoute = data ? latencyByRoute(data.tenants) : [];
+  const inflight = data ? totalInflight(data.inflight) : 0;
 
   return (
     <div className="flex flex-col gap-8">
@@ -91,7 +97,7 @@ export default function OverviewPage() {
             <KpiCard
               caption="Requests"
               value={formatCount(aggregateRequests(data.tenants))}
-              hint={`${data.inflight} em voo`}
+              hint={`${inflight} em voo`}
             />
           </div>
 
@@ -105,12 +111,12 @@ export default function OverviewPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                {data.by_route.length === 0 ? (
+                {byRoute.length === 0 ? (
                   <p className="py-8 text-center text-[14px] text-muted-foreground">
                     Sem dados no período
                   </p>
                 ) : (
-                  <LatencyChart rows={data.by_route} />
+                  <LatencyChart rows={byRoute} />
                 )}
               </CardContent>
             </Card>

@@ -39,7 +39,7 @@ const chartConfig = {
 } satisfies ChartConfig;
 
 export interface LatencyChartProps {
-  /** Per-route latency rows from `fetchMetrics().by_route`. */
+  /** Per-route latency rows — derived via `latencyByRoute(tenants)`. */
   rows: LatencyRow[];
 }
 

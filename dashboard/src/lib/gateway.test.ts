@@ -29,12 +29,17 @@ afterEach(() => {
 
 describe("fetchMetrics", () => {
   it("hits the /api/gateway/metrics proxy path and parses MetricsResponse", async () => {
+    // This payload is the ACTUAL `admin.MetricsResponse` shape the Go
+    // handler emits (gateway/internal/admin/metrics.go) — window,
+    // fsm_state, tenants[] with raw-UUID tenant_id, inflight as an
+    // InflightRow[] array. No generated_at / by_route / by_upstream /
+    // scalar inflight — the gateway never emits those.
     const payload = {
-      window: "5m",
-      generated_at: "2026-05-14T09:00:00Z",
+      window: "5m0s",
+      fsm_state: "healthy",
       tenants: [
         {
-          tenant_id: "converseai",
+          tenant_id: "8f1c0d2e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
           route: "/v1/chat/completions",
           p50: 120,
           p95: 480,
@@ -43,10 +48,10 @@ describe("fetchMetrics", () => {
           error_rate: 0.0,
         },
       ],
-      by_route: [{ key: "/v1/chat/completions", p50: 120, p95: 480, p99: 900 }],
-      by_upstream: [{ key: "local", p50: 100, p95: 400, p99: 800 }],
-      inflight: 3,
-      fsm_state: "HEALTHY",
+      inflight: [
+        { upstream: "local-llm", inflight: 3 },
+        { upstream: "openrouter-chat", inflight: 0 },
+      ],
     };
     const fetchMock = mockFetchOnce(payload);
     vi.stubGlobal("fetch", fetchMock);
@@ -57,27 +62,38 @@ describe("fetchMetrics", () => {
     expect(calledUrl).toBe("/api/gateway/metrics?window=5m");
     // Never the gateway directly.
     expect(calledUrl.startsWith("/api/gateway/")).toBe(true);
-    expect(result.fsm_state).toBe("HEALTHY");
+    expect(result.fsm_state).toBe("healthy");
     expect(result.tenants[0].p95).toBe(480);
+    expect(result.inflight[0].upstream).toBe("local-llm");
+    expect(result.inflight[0].inflight).toBe(3);
   });
 });
 
 describe("fetchAudit", () => {
   it("hits /api/gateway/audit with limit + offset and parses AuditResponse", async () => {
+    // This payload is the ACTUAL `admin.AuditResponse` shape the Go
+    // handler emits (gateway/internal/admin/audit.go) — `items` (not
+    // `rows`), no `total`, and AuditRow carries the request-metadata
+    // columns (request_id, route, method, status_code, latency_ms,
+    // error_code, event_kind, reason) — no id / actor / detail.
     const payload = {
-      rows: [
+      items: [
         {
-          id: "evt-1",
           ts: "2026-05-14T08:59:00Z",
+          request_id: "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+          tenant_id: "00000000-0000-0000-0000-000000000000",
+          route: "emerg_fsm_transition",
+          method: "healthy->degraded",
+          upstream: "degraded",
+          status_code: 0,
+          latency_ms: 0,
+          error_code: null,
           event_kind: "fsm_transition",
-          tenant_id: null,
-          actor: "system",
-          detail: { from: "HEALTHY", to: "DEGRADED" },
+          reason: "breaker_flap",
         },
       ],
       limit: 25,
       offset: 50,
-      total: 1,
     };
     const fetchMock = mockFetchOnce(payload);
     vi.stubGlobal("fetch", fetchMock);
@@ -86,8 +102,10 @@ describe("fetchAudit", () => {
 
     const calledUrl = fetchMock.mock.calls[0][0] as string;
     expect(calledUrl).toBe("/api/gateway/audit?limit=25&offset=50");
-    expect(result.rows[0].event_kind).toBe("fsm_transition");
-    expect(result.total).toBe(1);
+    expect(result.items[0].event_kind).toBe("fsm_transition");
+    expect(result.items[0].reason).toBe("breaker_flap");
+    expect(result.limit).toBe(25);
+    expect(result.offset).toBe(50);
   });
 });
 

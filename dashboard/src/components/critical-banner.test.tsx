@@ -25,14 +25,13 @@ vi.mock("@/lib/gateway", async (importOriginal) => {
 });
 
 function metricsWith(fsmState: string): MetricsResponse {
+  // Mirrors the real `admin.MetricsResponse` shape — window, fsm_state,
+  // tenants[], inflight as an InflightRow[] array (CR-01).
   return {
-    window: "5m",
-    generated_at: "2026-05-14T09:00:00Z",
-    tenants: [],
-    by_route: [],
-    by_upstream: [],
-    inflight: 0,
+    window: "5m0s",
     fsm_state: fsmState,
+    tenants: [],
+    inflight: [],
   };
 }
 
