@@ -111,9 +111,16 @@ describe("fetchAudit", () => {
 
 describe("fetchUsage", () => {
   it("hits /api/gateway/usage with tenant + from + to query params", async () => {
+    // This payload is the ACTUAL `admin.UsageResponse` shape the Go
+    // handler emits (gateway/internal/admin/usage.go) — verified
+    // field-for-field: tenant{id,slug,name,data_class,mode},
+    // range{from,to,granularity,timezone}, summary{9 cost/usage fields},
+    // rows[] of DayRow. The handler requires exactly tenant/from/to (400s
+    // when any is missing) and parses from/to as YYYY-MM-DD — which is
+    // exactly what fetchUsage sends (WR-01).
     const payload = {
       tenant: {
-        id: "uuid",
+        id: "8f1c0d2e-4a5b-6c7d-8e9f-0a1b2c3d4e5f",
         slug: "converseai",
         name: "ConverseAI",
         data_class: "normal",
@@ -136,7 +143,20 @@ describe("fetchUsage", () => {
         cost_total_brl: 2.0,
         requests_count: 10,
       },
-      rows: [],
+      rows: [
+        {
+          date: "2026-05-01",
+          tokens_in: 1000,
+          tokens_out: 2000,
+          audio_seconds: 0,
+          embeds_count: 0,
+          cost_local_brl: 1.5,
+          cost_local_phantom_brl: 0,
+          cost_external_brl: 0.5,
+          cost_total_brl: 2.0,
+          requests_count: 10,
+        },
+      ],
     };
     const fetchMock = mockFetchOnce(payload);
     vi.stubGlobal("fetch", fetchMock);
@@ -148,7 +168,11 @@ describe("fetchUsage", () => {
     expect(calledUrl).toContain("tenant=converseai");
     expect(calledUrl).toContain("from=2026-05-01");
     expect(calledUrl).toContain("to=2026-05-14");
+    expect(result.tenant.slug).toBe("converseai");
+    expect(result.range.timezone).toBe("America/Sao_Paulo");
     expect(result.summary.cost_total_brl).toBe(2.0);
+    expect(result.rows[0].date).toBe("2026-05-01");
+    expect(result.rows[0].cost_total_brl).toBe(2.0);
   });
 });
 
