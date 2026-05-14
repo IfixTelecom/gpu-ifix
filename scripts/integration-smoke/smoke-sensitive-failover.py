@@ -607,6 +607,24 @@ async def main_async(cfg: Config) -> int:
         if not fail_closed["ok"] and fail_closed.get("raw_error_body"):
             errors.append(f"fail_closed: {fail_closed['raw_error_body']}")
 
+        # HARD precondition (CR-01): the anti-leak audit proof is correlated by
+        # the fail_closed request's X-Request-ID. If it is empty/missing the
+        # audit gates cannot be tied to THIS request — and a soft-fail there
+        # still leaves fail_closed reading GREEN, which a reviewer can mistake
+        # for a flaky-DB miss rather than a missing-proof condition. An
+        # un-correlatable run is a hard failure, NOT a soft one.
+        if not request_id:
+            msg = (
+                "fail_closed request returned no X-Request-ID — the anti-leak "
+                "audit proof cannot be correlated; refusing to evaluate audit "
+                "gates (a non-correlatable run is a hard failure, not a soft "
+                "one)"
+            )
+            log.error("no request_id captured", detail=msg)
+            errors.append(msg)
+            _write_unevaluated_report(cfg, started_at, errors)
+            return 1
+
         # --- Step 3: streaming_fail_fast gate (optional) ------------------
         streaming_evaluated = not cfg.skip_streaming_gate
         streaming_fail_fast: dict[str, Any] | None = None
@@ -630,9 +648,17 @@ async def main_async(cfg: Config) -> int:
     finished_at = datetime.now(timezone.utc).isoformat()
 
     # never_external: the audit_log.upstream == blocked_sensitive value IS the
-    # black-box proof the request never went external.
+    # black-box proof the request never went external — but it is asserted from
+    # the audit row alone. CR-01: make it CONJUNCTIVE with the HTTP-side
+    # fail_closed proof so a GREEN never_external can ONLY happen when the
+    # request provably failed closed at the HTTP layer (503 + envelope +
+    # Retry-After) AND the audit row independently confirms blocked_sensitive
+    # for that exact request_id. A gateway that blocks-and-audits but returns
+    # 200 to the client (exactly the leak being guarded against) must NOT read
+    # never_external: true.
     never_external_ok = (
-        audit["audit_log_row_found"]
+        fail_closed["ok"]
+        and audit["audit_log_row_found"]
         and audit["audit_upstream"] == AUDIT_UPSTREAM_BLOCKED
     )
     never_external: dict[str, Any] = {
