@@ -149,8 +149,8 @@ Plans:
 - [x] 06-06-PLAN.md — Vast spike port discovery + vast/client.go (5 ops + parseErrorBody + T-6-01 enforced) + lifecycle.go (provisionLifecycle search→create→/health + bid race retry 3x + Pitfalls 1+5+9 enforced) + 3 integration tests (happy + price cap + bid race lost) (PRV-01, PRV-05, PRV-06, PRV-07, SC-1, SC-5)
 - [x] 06-07-PLAN.md — cancelActiveLifecycle (3 layers: ctx + Pub/Sub + post-create destroy) + recovery.go (D-D5 3 cenários: pre-create orphan + lost + zombie) + 3 integration tests (cancel pre-create + cancel post-create + leader recovery zombie) (PRV-09, SC-3)
 - [x] 06-08-PLAN.md — upstreams.Loader OverrideTier0/RestoreTier0 (atomic.Pointer LLM-only) + dispatcher RegisterTraffic hook + evaluateActive/Recovering/Cooldown (cutback + idle destroy + multi-failover ride-out) + 3 integration tests (cutback + idle destroy + ride-out) (PRV-08, SC-4)
-- [ ] 06-09-PLAN.md — budget.go (checkBudget + dedupe Pitfall 11 CORRECT + Sentry warning) + 60s tick wrapper + 2 integration tests (budget alert + audit completeness 11 fields) (PRV-05, PRV-10)
-- [ ] 06-10-PLAN.md — gatewayctl emerg state|force-provision|force-destroy|lifecycles + main.go wiring (NewReconciler + 2 goroutines + Vast.Ping at boot) (PRV-08, PRV-10)
+- [x] 06-09-PLAN.md — budget.go (checkBudget + dedupe Pitfall 11 CORRECT + Sentry warning) + 60s tick wrapper + 2 integration tests (budget alert + audit completeness 11 fields) (PRV-05, PRV-10)
+- [x] 06-10-PLAN.md — gatewayctl emerg state|force-provision|force-destroy|lifecycles + main.go wiring (NewReconciler + 2 goroutines + Vast.Ping at boot) (PRV-08, PRV-10)
 - [ ] 06-11-PLAN.md — HUMAN-UAT: 6 cenários LIVE Vast.ai (force-provision, budget tally, force-destroy, Sentry, budget alert, cancel-in-flight) + RUNBOOK-EMERGENCY-POD.md (PRV-01..10, SC-1..5)
 **Research hint:** yes (Vast.ai REST API quirks — SSH/onstart/port exposure/bid acceptance timing; 3h timeboxed spike before commit)
 **UI hint:** no
