@@ -45,13 +45,31 @@ function getClient(): DrizzleClient {
 }
 
 /**
- * Drizzle client over the dashboard's OWN auth DB. Proxied so the underlying
- * Pool + client are constructed on first property access rather than at
- * import — `next build` evaluates this module with no DSN in env.
+ * Drizzle client over the dashboard's OWN auth DB.
+ *
+ * WR-09: the lazy-init goal (defer Pool construction past `next build`,
+ * which evaluates this module with no DSN in env) is valid, but a Proxy
+ * is the wrong tool — `Reflect.get(target, prop, receiver)` with the
+ * proxy as `receiver` runs any getter on the real client with `this` =
+ * the proxy, and hands back unbound methods, so `instanceof` and
+ * `const { select } = db` break opaquely on a drizzle minor bump.
+ *
+ * Instead, `db` is a Proxy ONLY as a thin lazy-access shim, but every
+ * access is forwarded to the REAL client as the `Reflect.get` receiver —
+ * so getters run with the correct `this` and methods stay bound to the
+ * real drizzle client, never the proxy. Prefer `getDb()` in new code:
+ * it returns the real client object directly with no shim at all.
  */
+export function getDb(): DrizzleClient {
+  return getClient();
+}
+
 export const db = new Proxy({} as DrizzleClient, {
-  get(_target, prop, receiver) {
-    return Reflect.get(getClient(), prop, receiver);
+  get(_target, prop) {
+    const real = getClient();
+    // Forward to the REAL client as the receiver — never the proxy — so
+    // getters see the right `this` and methods come back bound correctly.
+    return Reflect.get(real, prop, real);
   },
 });
 
