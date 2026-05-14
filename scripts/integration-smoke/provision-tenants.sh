@@ -106,8 +106,13 @@ for i in "${!TENANT_SLUGS[@]}"; do
   fi
   if [[ "$GW_RC" -eq 0 ]]; then
     log "tenant '$slug' created"
-  elif [[ "$GW_RC" -eq 1 ]] && printf '%s' "$GW_OUT" | grep -q 'already exists'; then
+  elif [[ "$GW_RC" -eq 1 ]] && printf '%s' "$GW_OUT" | grep -qF "tenant slug '$slug' already exists"; then
     # Idempotency signal: re-run on an already-provisioned tenant is OK.
+    # Match gatewayctl's EXACT message (gateway/cmd/gatewayctl/tenant.go:80,
+    # "error: tenant slug '%s' already exists") via grep -F + the interpolated
+    # slug. An unanchored 'already exists' substring would also match unrelated
+    # migration-layer / Go-stdlib failures and silently report a missing tenant
+    # as provisioned — which would then let --mint-keys mint against nothing.
     log "tenant '$slug' already provisioned — OK"
   else
     log "tenant '$slug' create failed (exit $GW_RC): $GW_OUT"
