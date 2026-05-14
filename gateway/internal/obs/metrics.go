@@ -464,7 +464,8 @@ var GatewayVastAPIRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 //   - RequestDurationByRoute:    ~4 routes    × 9 buckets ≈ 44 series
 //   - RequestDurationByUpstream: ~6 upstreams × 9 buckets ≈ 60 series
 //   - AlertDroppedTotal:         1 plain counter
-//   Total Phase 7 baseline: ~105 series.
+//   - AlertSendsTotal:           3 channels × 2 results = 6 series
+//   Total Phase 7 baseline: ~111 series.
 // Deliberately NOT crossed: there is no tenant × route × upstream histogram.
 // Per-tenant percentiles come from audit_log SQL aggregation in plan 07-03,
 // not from a Prometheus label — adding a tenant label here would multiply
@@ -507,6 +508,23 @@ var AlertDroppedTotal = promauto.NewCounter(
 		Name: "gateway_alert_dropped_total",
 		Help: "Alert events dropped because a per-channel worker queue was full (back-pressure fail-safe).",
 	},
+)
+
+// AlertSendsTotal counts alert-delivery attempts per channel and
+// outcome. The alerter (plan 07-05) increments this once per Channel.Send
+// call. Cardinality is fixed and tiny: channel ∈ {chatwoot, clickup,
+// brevo} × result ∈ {ok, err} = 6 series — no tenant or fingerprint
+// label, deliberately, so an alert storm cannot inflate the series
+// count. A rising "err" rate for one channel means that provider is
+// down (its circuit breaker should also be open); a flat "ok" rate
+// across all channels during a known incident means the alerter is not
+// receiving events.
+var AlertSendsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "gateway_alert_sends_total",
+		Help: "Alert delivery attempts, labeled by channel (chatwoot|clickup|brevo) and result (ok|err).",
+	},
+	[]string{"channel", "result"},
 )
 
 // Handler returns the /metrics endpoint handler.
