@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-14T23:42:55.000Z"
+last_updated: "2026-05-15T10:58:06.000Z"
 progress:
   total_phases: 10
   completed_phases: 6
@@ -37,9 +37,7 @@ Next autonomous-eligible work: Phase 07 (Observability — Dashboard & Alerting)
   - Phase 3: SC-1 live failover UAT pending (`03-VERIFICATION.md` human_needed)
   - Phase 4: SC-1/SC-2/SC-4 live UAT deferred pending ai-gateway-dev stack deploy (`04-VERIFICATION.md` human_needed)
   - Phase 5: SC-4 + SC-5 deferred (`05-VERIFICATION.md` passed_partial)
-- **Phase 6:** 10/11 plans executed (06-01..06-10 GREEN + summaries). 06-11 is `autonomous: false` HUMAN-UAT — Tasks 1+2 done (06-HUMAN-UAT.md + docs/RUNBOOK-EMERGENCY-POD.md created, commit 2b539fc); Task 3 is a **blocking** human-verify checkpoint (6 LIVE Vast.ai UAT scenarios, ~R## Current Position
-
-0-15). No 06-11-SUMMARY.md, no 06-VERIFICATION.md yet.
+- **Phase 6:** 10/11 plans executed (06-01..06-10 GREEN + summaries). 06-11 is `autonomous: false` HUMAN-UAT — Tasks 1+2 done (06-HUMAN-UAT.md + docs/RUNBOOK-EMERGENCY-POD.md created, commit 2b539fc); Task 3 is a **blocking** human-verify checkpoint (6 LIVE Vast.ai UAT scenarios, ~R$10-15). No 06-11-SUMMARY.md, no 06-VERIFICATION.md yet.
   - **Integration tests (emerg suite): RESOLVED 2026-05-14.** First real CI run of `gateway/internal/integration_test/emerg_*` (Phase 6 deferred them to CI runtime — never executed before) failed 8 tests. 3 root causes found+fixed via `/gsd-debug`: (1) `freshSchema` missing `emergency_lifecycles` TRUNCATE → cross-test DB contamination (commit 9772d71); (2) stale Plan 06-05 force-provision/D-C5 test assertions vs reconciler evolved by 06-06+ (commit 355843b); (3) re-trigger oscillation race — `offer_race_lost` abort returned FSM straight to Healthy instead of Cooldown, `evaluateHealthy` re-fired the trigger every tick — fixed via new `ProvisionFailureCooldownSeconds` config (commit 85ba3da). All 22 emerg integration tests GREEN in CI run 25891568768 (build-gateway, develop). Debug sessions: `.planning/debug/emerg-integration-tests-ci.md` + `.planning/debug/emerg-bid-race-lost.md`.
 
 - **Phases 7–10:** Not started (no phase directories).
@@ -82,6 +80,12 @@ Next autonomous-eligible work: Phase 07 (Observability — Dashboard & Alerting)
 ### Blockers
 
 - **Phase 6 cannot reach COMPLETE without operator action:** 06-11 Task 3 is a blocking human-verify checkpoint requiring real Vast.ai spend. Autonomous mode cannot satisfy it. Phases 7-10 do not hard-depend on Phase 6 *verification* (they depend on Phase 6 FSM states/code, which exist) — but Phase 7's goal explicitly visualizes Phase 6 FSM states, so plan Phase 7 with Phase 6 code as-built.
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260515-ayc | Fix STATE.md corruption (heading `## Current Position` duplicado injetado no meio do Phase 6 bullet) | 2026-05-15 | f44cf11 | [260515-ayc-fix-state-md-corruption-linha-40-42-tem-](./quick/260515-ayc-fix-state-md-corruption-linha-40-42-tem-/) |
 
 ## Session Continuity
 
