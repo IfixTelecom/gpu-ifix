@@ -634,9 +634,18 @@ func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vas
 			// keys are literal `-p HOST_PORT:CONTAINER_PORT` flag strings.
 			"-p 9100:9100": "1",
 			"-p 8000:8000": "1",
-			// Phase 1 onstart consumes these to pull weights.
-			"MINIO_ENDPOINT": "https://s3.ifixtelecom.com.br",
-			"MINIO_BUCKET":   "ai-gateway",
+			// Phase 1 onstart consumes these to pull weights from MinIO.
+			// Mirrors smoke.yml secrets so onstart preflight passes.
+			"MINIO_ENDPOINT":         r.deps.Cfg.MinioEndpoint,
+			"MINIO_BUCKET":           r.deps.Cfg.MinioBucket,
+			"MINIO_ACCESS_KEY":       r.deps.Cfg.MinioAccessKey,
+			"MINIO_SECRET_KEY":       r.deps.Cfg.MinioSecretKey,
+			"WEIGHTS_QWEN_KEY":       r.deps.Cfg.WeightsQwenKey,
+			"WEIGHTS_QWEN_SHA256":    r.deps.Cfg.WeightsQwenSHA256,
+			"WEIGHTS_WHISPER_KEY":    r.deps.Cfg.WeightsWhisperKey,
+			"WEIGHTS_WHISPER_SHA256": r.deps.Cfg.WeightsWhisperSHA256,
+			"WEIGHTS_BGE_M3_KEY":     r.deps.Cfg.WeightsBGEM3Key,
+			"WEIGHTS_BGE_M3_SHA256":  r.deps.Cfg.WeightsBGEM3SHA256,
 		},
 		Onstart:     "/root/onstart.sh", // Phase 1 image bakes this script in
 		Runtype:     "ssh",

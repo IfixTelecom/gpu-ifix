@@ -133,7 +133,20 @@ type Config struct {
 	USDToBRLRate                      float64 // USD_TO_BRL_RATE (default 5.0; D-D4 — operator updates quarterly for cost audit)
 	VastAIAPIKey                      string  // VAST_AI_API_KEY (D-A5; empty = Phase 6 disabled with warning, NOT fail-loud)
 	VastAPIQPSLimit                   int     // VAST_API_QPS_LIMIT (default 1; RESEARCH Open Question 12 — conservative 1 req/s token bucket)
-	VastPriceCapDPH                   float64 // VAST_PRICE_CAP_DPH (default 0.40; D-A2 — RTX 4090 cap; epsilon comparison cap+0.0001 per Pitfall 5)
+	VastPriceCapDPH                   float64 // VAST_PRICE_CAP_DPH (default 0.40; RTX 4090 cap; epsilon comparison cap+0.0001 per Pitfall 5)
+
+	// Pod-side secrets forwarded to the Vast.ai emergency pod via CreateRequest.Env.
+	// Mirror Phase 1 smoke.yml — pod onstart aborts without them. Sensitive; never log.
+	MinioEndpoint        string // MINIO_ENDPOINT (e.g. https://s3.ifixtelecom.com.br)
+	MinioBucket          string // MINIO_BUCKET (default "ai-gateway")
+	MinioAccessKey       string // MINIO_ACCESS_KEY
+	MinioSecretKey       string // MINIO_SECRET_KEY
+	WeightsQwenKey       string // WEIGHTS_QWEN_KEY     (MinIO object path)
+	WeightsQwenSHA256    string // WEIGHTS_QWEN_SHA256
+	WeightsWhisperKey    string // WEIGHTS_WHISPER_KEY
+	WeightsWhisperSHA256 string // WEIGHTS_WHISPER_SHA256
+	WeightsBGEM3Key      string // WEIGHTS_BGE_M3_KEY
+	WeightsBGEM3SHA256   string // WEIGHTS_BGE_M3_SHA256
 
 	// Phase 7 — alerting (all optional; empty = channel disabled with WARN).
 	// Mirrors the SentryDSN precedent: an unset alert var NEVER fails boot.
@@ -239,6 +252,17 @@ func Load() (Config, error) {
 		VastAIAPIKey:                      os.Getenv("VAST_AI_API_KEY"),
 		VastAPIQPSLimit:                   atoiOr(os.Getenv("VAST_API_QPS_LIMIT"), 1),
 		VastPriceCapDPH:                   floatOr(os.Getenv("VAST_PRICE_CAP_DPH"), 0.40),
+
+		MinioEndpoint:        envOr("MINIO_ENDPOINT", "https://s3.ifixtelecom.com.br"),
+		MinioBucket:          envOr("MINIO_BUCKET", "ai-gateway"),
+		MinioAccessKey:       os.Getenv("MINIO_ACCESS_KEY"),
+		MinioSecretKey:       os.Getenv("MINIO_SECRET_KEY"),
+		WeightsQwenKey:       envOr("WEIGHTS_QWEN_KEY", "qwen3.5-27b-Q4_K_M/v1.0.0/model.gguf"),
+		WeightsQwenSHA256:    os.Getenv("WEIGHTS_QWEN_SHA256"),
+		WeightsWhisperKey:    envOr("WEIGHTS_WHISPER_KEY", "whisper-large-v3/v1.0.0/model.tar.gz"),
+		WeightsWhisperSHA256: os.Getenv("WEIGHTS_WHISPER_SHA256"),
+		WeightsBGEM3Key:      envOr("WEIGHTS_BGE_M3_KEY", "bge-m3/v1.0.0/model.tar.gz"),
+		WeightsBGEM3SHA256:   os.Getenv("WEIGHTS_BGE_M3_SHA256"),
 
 		// Phase 7 — alerting. All optional; not added to requiredOrder below.
 		ChatwootAPIURL:          os.Getenv("CHATWOOT_API_URL"),
