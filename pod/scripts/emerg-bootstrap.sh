@@ -19,6 +19,17 @@
 
 set -euo pipefail
 
+# Phase 6 Vast.ai compatibility — sshd MUST be listening on :22 before
+# Vast.ai flips actual_status from "loading" to "running". Without that
+# flip, /v1/models on port 8000 is never visible through the Vast.ai
+# port-forward, so the reconciler health probe times out even when
+# llama-server is fully booted. Spawn sshd in the background as the
+# first action; failure here is non-fatal for llama-server itself but
+# logged for debugging.
+/usr/sbin/sshd -D >/var/log/sshd.log 2>&1 &
+SSHD_PID=$!
+echo "[emerg-bootstrap] sshd spawned pid=${SSHD_PID}"
+
 WEIGHTS_PATH=/weights/qwen/model.gguf
 mkdir -p "$(dirname "$WEIGHTS_PATH")"
 

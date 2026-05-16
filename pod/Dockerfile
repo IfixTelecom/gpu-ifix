@@ -36,9 +36,16 @@ RUN apt-get update \
       curl \
       tzdata \
       tini \
+      openssh-server \
   && ln -fs /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime \
   && dpkg-reconfigure -f noninteractive tzdata \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && mkdir -p /var/run/sshd /root/.ssh \
+  && chmod 700 /root/.ssh \
+  && sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+  && sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config \
+  && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+  && ssh-keygen -A
 
 # Bundle the patched Jinja template (plan 02 D-08)
 COPY pod/templates/qwen3.5-27b-tool-calling.jinja /app/templates/qwen3.5-27b-tool-calling.jinja
