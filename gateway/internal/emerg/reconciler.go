@@ -694,21 +694,20 @@ func (r *Reconciler) evaluateEmergencyProvisioning(ctx context.Context, now time
 		r.startProvisioning(ctx)
 		return
 	}
-	// Cancel detection: tracker shows local-llm recovered (CLOSED) or is
-	// re-probing (HALF_OPEN). D-C3 — cancel and return FSM to Healthy.
-	//
-	// Fresh-tracker guard: tracker.State() defaults to "closed" until the
-	// first ApplyEvent lands (zero-value). A fresh replica that just
-	// accepted a force-provision would otherwise cancel itself on the
-	// very next tick because state == "closed" with no recovery ever
-	// observed. closedSince > 0 means an actual OPEN→CLOSED transition
-	// (real recovery); closedSince == 0 means the tracker has never seen
-	// a CLOSED event, so the "closed" reading is initial-state, not
-	// recovery. HALF_OPEN always indicates active probing — keep it as a
-	// cancel signal regardless of recovery history.
+	// Cancel detection: tracker shows local-llm recovered. D-C3 — cancel
+	// and return FSM to Healthy. Only a real OPEN→CLOSED transition
+	// (closedSince > 0) counts as recovery. HALF_OPEN is the breaker's
+	// natural probing state — it transitions there whenever the
+	// cooldown expires for a single trial, then flips back to OPEN on
+	// failed probe. Treating HALF_OPEN as recovery falsely cancels
+	// emergency provisioning whenever the operator-fronted probe loop
+	// briefly checks the still-broken primary upstream, which is
+	// continuous on a dev gateway pointed at a placeholder upstream URL.
+	// CLOSED with closedSince == 0 is the tracker's initial zero value,
+	// not an observation, so also skip the cancel.
 	trackerState := r.tracker.State()
 	closedAfterRecovery := trackerState == "closed" && r.tracker.SustainedClosedSeconds() > 0
-	if trackerState == "half-open" || closedAfterRecovery {
+	if closedAfterRecovery {
 		log.Info("local-llm recovered during provisioning; cancelling (D-C3)",
 			"tracker_state", trackerState,
 			"lifecycle_id", r.activeLifecycle.Load().ID)
