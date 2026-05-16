@@ -818,16 +818,36 @@ func (r *Reconciler) applyEmergCommand(ctx context.Context, ev redisx.EmergEvent
 // force_provision_request command. INSERTs a lifecycle row with
 // trigger_reason='manual_force' BEFORE the FSM transition (D-C5: the
 // partial unique index is the gate; INSERT-first surfaces conflicts via
-// pg unique violation rather than a silent FSM-only transition). On
-// success, transitions HEALTHY → FAILED_OVER → EMERGENCY_PROVISIONING.
+// pg unique violation rather than a silent FSM-only transition).
 //
-// Plan 06-05 stops at the FSM transition — Plan 06-06
-// evaluateEmergencyProvisioning will pick up the new state on the next
-// tick and drive the Vast.ai provisioning path.
+// Accepts force-provision from FSM states {Healthy, Degraded, FailedOver,
+// Cooldown}. Rejects from {EmergencyProvisioning, EmergencyActive,
+// Recovering} where a lifecycle is already in-flight — the
+// ListLiveEmergencyLifecycles check below is the authoritative gate, but
+// the FSM-state precheck gives a cleaner reject reason and avoids the
+// race where the DB check sees zero rows but the FSM is mid-transition.
+//
+// Transition path: SetState (force CAS-loop) to EmergencyProvisioning
+// regardless of current state. Previously this used Transition(Healthy,
+// FailedOver) + Transition(FailedOver, EmergencyProvisioning) which
+// silently no-op'd when the FSM was in Cooldown after a recent failure
+// (e.g., offer_race_lost), leaving the FSM stuck while spawnProvision-
+// Goroutine still booked a pod — a bill-burning orphan. SetState
+// guarantees the FSM transition commits even from Cooldown.
+//
+// Plan 06-06 evaluateEmergencyProvisioning will pick up the new state on
+// the next tick and drive the Vast.ai provisioning path.
 func (r *Reconciler) handleForceProvision(ctx context.Context, ev redisx.EmergEvent, log *slog.Logger) {
 	if r.q == nil {
 		log.Error("force-provision rejected: no DB pool wired (test misconfiguration)",
 			"by_replica", ev.ReplicaID)
+		return
+	}
+	current := r.deps.FSM.State()
+	switch current {
+	case StateEmergencyProvisioning, StateEmergencyActive, StateRecovering:
+		log.Warn("force-provision rejected: FSM already in emergency path",
+			"state", current.String(), "by_replica", ev.ReplicaID)
 		return
 	}
 	live, err := r.q.ListLiveEmergencyLifecycles(ctx)
@@ -855,8 +875,8 @@ func (r *Reconciler) handleForceProvision(ctx context.Context, ev redisx.EmergEv
 		StartedUnix: time.Now().Unix(),
 	})
 	now := time.Now()
-	r.deps.FSM.Transition(StateHealthy, StateFailedOver, now, "manual_force_provision:"+ev.Reason)
-	r.deps.FSM.Transition(StateFailedOver, StateEmergencyProvisioning, now, "manual_force_provision:"+ev.Reason)
+	reason := "manual_force_provision:" + current.String() + ":" + ev.Reason
+	r.deps.FSM.SetState(StateEmergencyProvisioning, now, reason)
 	// Spawn the same SearchOffers → CreateInstance → markHealthy goroutine
 	// that the auto-trigger path uses. Without this the reconciler tick
 	// would skip startProvisioning (activeLifecycle != nil) and the pod
@@ -864,7 +884,8 @@ func (r *Reconciler) handleForceProvision(ctx context.Context, ev redisx.EmergEv
 	// regression.
 	r.spawnProvisionGoroutine(ctx, id)
 	log.Info("force-provision accepted",
-		"lifecycle_id", id, "reason", ev.Reason, "by_replica", ev.ReplicaID)
+		"lifecycle_id", id, "from_state", current.String(),
+		"reason", ev.Reason, "by_replica", ev.ReplicaID)
 }
 
 // handleForceDestroy is the leader-side handler for a
