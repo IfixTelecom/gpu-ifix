@@ -685,7 +685,12 @@ func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vas
 		// not inside the container, and the host has no application code.
 		Onstart:     "",
 		Runtype:     "ssh",
-		Disk:        50,
+		// 22 GB image (Qwen weights pre-baked) + extraction overhead +
+		// llama-server runtime tmp; 50 GB was marginal during Phase 6 UAT
+		// (instance stuck at actual_status=loading with ports=None after
+		// pull complete). 80 GB leaves headroom and the spot-market filter
+		// still matches plenty of offers.
+		Disk:        80,
 		Label:       fmt.Sprintf("ifix-emerg-lifecycle-%d", lifecycleID),
 		TargetState: "running",
 	}
