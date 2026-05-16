@@ -1,10 +1,12 @@
 ---
 id: SEED-001
-status: dormant
+status: active
 planted: 2026-05-16
+activated: 2026-05-16
 planted_during: v1.0 milestone, Phase 6 UAT live (lifecycle 33)
-trigger_when: when revisiting Phase 6 emergency-pod cold-start time OR when iteration speed on pod/onstart.sh becomes blocker OR when starting Phase 10 production hardening (review cost/time of failover path)
-scope: gateway/internal/emerg/reconciler, pod/onstart.sh, pod/Dockerfile, .github/workflows/build-pod.yml, gateway/.env.portainer.dev (EMERGENCY_POD_IMAGE_TAG)
+activated_by: Pedro decision 2026-05-16 — bug crítico runtype=ssh ignorando CMD da custom image (STATE.md:84) torna refator pra template Vast a fix natural
+trigger_when: NEXT SESSION (Pedro requested 2026-05-16 — "vamos iniciar o pod usando os templates")
+scope: gateway/internal/emerg/reconciler, gateway/internal/emerg/lifecycle.go, pod/onstart.sh, pod/Dockerfile, .github/workflows/build-pod.yml, gateway/.env.portainer.dev (EMERGENCY_POD_IMAGE_TAG)
 ---
 
 # SEED-001 — Refator emergency-pod: template Vast.ai Ubuntu+CUDA vs custom image GHCR
@@ -78,12 +80,25 @@ Ganho estimado: **2-4min de cold-start failover** + iteração dev drasticamente
 
 ## Próxima sessão
 
+**ATIVADO 2026-05-16 — refator não é mais optativo. Bug crítico custom image (STATE.md:84) bloqueia Phase 6 UAT.**
+
 `/gsd-discuss-phase` puxa este seed como base. Surface assumptions:
 - cache hit rates Vast.ai templates por classe de GPU
 - CUDA version compatibility com llama.cpp release
 - llama-server binário disponibilidade + sha256 pinning
+- Runtype "args" vs "ssh" + onstart_cmd inline vs script remoto
 
 Then `/gsd-plan-phase` cria plan de implementação.
+
+## Decisão arquitetural ativa
+
+**Runtype atual `"ssh"` em `lifecycle.go:687` está quebrado** (ignora CMD da image). Refator pra template Vast resolve isso porque:
+1. Template Vast Ubuntu+CUDA é mínimo — sem CMD próprio interessante
+2. Onstart Vast (executado no HOST do pod, antes do container subir) baixa llama-server binário + Qwen + dispara `docker run` do template com args customizados
+3. OU: container do template já tem entrypoint mínimo, `Onstart` Vast injeta script via volume mount + executa via SSH/docker exec
+4. Path mais limpo: usar template + setar `Onstart` em Vast.CreateRequest com bash inline que faz fetch llama-bin + Qwen + start llama-server
+
+Decisão entre opções acima → discuss-phase próxima sessão.
 
 ## Breadcrumbs
 
