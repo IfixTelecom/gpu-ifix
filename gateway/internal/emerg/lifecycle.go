@@ -683,8 +683,8 @@ func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vas
 		// which downloads qwen weights from MinIO then execs llama-server.
 		// No Onstart hook needed — Vast.ai's onstart runs on the VM host,
 		// not inside the container, and the host has no application code.
-		Onstart:     "",
-		Runtype:     "ssh",
+		Onstart: "",
+		Runtype: "ssh",
 		// 22 GB image (Qwen weights pre-baked) + extraction overhead +
 		// llama-server runtime tmp; 50 GB was marginal during Phase 6 UAT
 		// (instance stuck at actual_status=loading with ports=None after
