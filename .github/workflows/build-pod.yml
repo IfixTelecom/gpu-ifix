@@ -182,6 +182,21 @@ jobs:
           tags: ${{ needs.compute-tags.outputs.pod_tags }}
           cache-from: type=gha,scope=ifix-ai-pod
           cache-to:   type=gha,scope=ifix-ai-pod,mode=max
+          # Phase 6: bake Qwen Q4_K_M weights into the image so emergency
+          # pods boot without an in-instance MinIO round trip. The build
+          # downloads the SHA-256-pinned blob from the same MinIO bucket
+          # Phase 1 smoke.yml uses and validates the digest before the
+          # RUN step exits. The MinIO credentials below come from
+          # encrypted repo secrets (build-time only — never written into
+          # an image layer, the Dockerfile uses --mount=type=secret).
+          build-args: |
+            MINIO_ENDPOINT=${{ secrets.MINIO_ENDPOINT }}
+            MINIO_BUCKET=${{ secrets.MINIO_BUCKET }}
+            WEIGHTS_QWEN_KEY=qwen3.5-27b-Q4_K_M/v1.0.0/model.gguf
+            WEIGHTS_QWEN_SHA256=${{ secrets.WEIGHTS_QWEN_SHA256 }}
+          secrets: |
+            minio_access_key=${{ secrets.MINIO_ACCESS_KEY }}
+            minio_secret_key=${{ secrets.MINIO_SECRET_KEY }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
