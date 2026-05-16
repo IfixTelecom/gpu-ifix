@@ -125,7 +125,7 @@ func instanceFromHealthURL(t *testing.T, instanceID int64, healthURL string) vas
 		ActualStatus: "running",
 		PublicIPAddr: ip,
 		Ports: map[string][]vast.PortBinding{
-			"9100/tcp": {{HostIP: "0.0.0.0", HostPort: port}},
+			"8000/tcp": {{HostIP: "0.0.0.0", HostPort: port}},
 		},
 	}
 }

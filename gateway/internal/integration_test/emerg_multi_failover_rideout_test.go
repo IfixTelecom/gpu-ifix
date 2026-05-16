@@ -59,7 +59,7 @@ func TestEmergMultiFailoverRideOut(t *testing.T) {
 	inst := vast.Instance{
 		ID: 12345, ActualStatus: "running", PublicIPAddr: "127.0.0.1",
 		Ports: map[string][]vast.PortBinding{
-			"9100/tcp": {{HostIP: "0.0.0.0", HostPort: "40713"}},
+			"8000/tcp": {{HostIP: "0.0.0.0", HostPort: "40713"}},
 		},
 		HostID: 100, DphTotal: 0.35,
 	}
