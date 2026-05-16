@@ -58,39 +58,6 @@ COPY pod/templates/qwen3.5-27b-tool-calling.jinja.sha256 /app/templates/qwen3.5-
 COPY pod/scripts/emerg-bootstrap.sh /usr/local/bin/emerg-bootstrap.sh
 RUN chmod +x /usr/local/bin/emerg-bootstrap.sh
 
-# Phase 6 — pre-bake Qwen Q4_K_M weights into the image. Emergency pods
-# created by the gateway reconciler boot on stock Vast.ai 4090 instances
-# whose egress to MinIO can be slow enough to blow the cold-start budget
-# (observed 40 min download in Phase 6 UAT-1). Baking the 16 GB blob
-# into the image moves the cost to image pull time, which Vast.ai pulls
-# from GHCR over fast registry mirrors.
-#
-# SHA-256 is validated inline so a corrupt download fails the build
-# rather than producing a poisoned image. Credentials come from BuildKit
-# secret mounts (--mount=type=secret) — they are visible to the RUN
-# command but not persisted in any image layer (verified by `docker
-# history`). Run mc download in a single layer to keep the squashed
-# weight blob in /weights/qwen/model.gguf and nothing else.
-ARG MINIO_ENDPOINT
-ARG MINIO_BUCKET
-ARG WEIGHTS_QWEN_KEY
-ARG WEIGHTS_QWEN_SHA256
-RUN --mount=type=secret,id=minio_access_key \
-    --mount=type=secret,id=minio_secret_key \
-    set -eux; \
-    : "${MINIO_ENDPOINT:?MINIO_ENDPOINT build-arg missing}"; \
-    : "${MINIO_BUCKET:?MINIO_BUCKET build-arg missing}"; \
-    : "${WEIGHTS_QWEN_KEY:?WEIGHTS_QWEN_KEY build-arg missing}"; \
-    : "${WEIGHTS_QWEN_SHA256:?WEIGHTS_QWEN_SHA256 build-arg missing}"; \
-    MINIO_AK="$(cat /run/secrets/minio_access_key)"; \
-    MINIO_SK="$(cat /run/secrets/minio_secret_key)"; \
-    curl -sLo /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc; \
-    chmod +x /usr/local/bin/mc; \
-    mc alias set ifix "$MINIO_ENDPOINT" "$MINIO_AK" "$MINIO_SK" >/dev/null; \
-    mc cp "ifix/${MINIO_BUCKET}/${WEIGHTS_QWEN_KEY}" /weights/qwen/model.gguf; \
-    echo "${WEIGHTS_QWEN_SHA256}  /weights/qwen/model.gguf" | sha256sum -c -; \
-    mc alias remove ifix >/dev/null
-
 # Sanity: verify template integrity at build time (fails the build if drift)
 RUN EXPECTED="$(tr -d '[:space:]' < /app/templates/qwen3.5-27b-tool-calling.jinja.sha256)" \
   && ACTUAL="$(sha256sum /app/templates/qwen3.5-27b-tool-calling.jinja | awk '{print $1}')" \
