@@ -6,9 +6,9 @@ status: executing
 last_updated: "2026-05-17T02:28:12.368Z"
 progress:
   total_phases: 11
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 78
-  completed_plans: 74
+  completed_plans: 76
   percent: 64
 ---
 
@@ -37,8 +37,8 @@ Next autonomous-eligible work: Phase 07 (Observability — Dashboard & Alerting)
   - Phase 3: SC-1 live failover UAT pending (`03-VERIFICATION.md` human_needed)
   - Phase 4: SC-1/SC-2/SC-4 live UAT deferred pending ai-gateway-dev stack deploy (`04-VERIFICATION.md` human_needed)
   - Phase 5: SC-4 + SC-5 deferred (`05-VERIFICATION.md` passed_partial)
-- **Phase 6 (NOVO 2026-05-16):** Emergency-Pod Template Refactor (SEED-001 ativado). Goal: trocar custom GHCR image por template Vast.ai Ubuntu+CUDA + llama-server binário pinned. PR1 (Strategy B Locked migration) Waves 0-3 complete: 06-02 config refactor (881e9c6), 06-03 vast types (d8c322c), 06-04 lifecycle.go Strategy B (19942bc), **06-05 integration test fixture closeout (e179104, 2026-05-16)**. PR1 tecnicamente ready — falta apenas plan 06-06 HUMAN-UAT live. Phase 6 anterior renomeada → Phase 6.5 (swap por dependência arquitetural: refactor é foundation, auto-prov consome).
-- **Phase 6.5 (ex-Phase 6):** 10/11 plans executed (06.5-01..06.5-10 GREEN + summaries — renomeados de 06-* em 2026-05-16). 06.5-11 is `autonomous: false` HUMAN-UAT — Tasks 1+2 done (06.5-HUMAN-UAT.md + docs/RUNBOOK-EMERGENCY-POD.md created, commit 2b539fc); Task 3 is a **blocking** human-verify checkpoint (6 LIVE Vast.ai UAT scenarios, ~R$10-15) — BLOQUEADO por Phase 6 refactor (runtype=ssh bug torna UAT impossível end-to-end). No 06.5-11-SUMMARY.md, no 06.5-VERIFICATION.md yet.
+- **Phase 6 (COMPLETE 2026-05-17):** Emergency-Pod Template Refactor (SEED-001). All 5 waves shipped on develop. PR1 (Strategy B Locked) + PR2 (cleanup): 06-01..06-07 all GREEN. Live UAT lifecycle 39 (Vast 4090 Spain ES, $0.43/h, 25min) validated end-to-end — `/v1/chat/completions` HTTP 200, Qwen3 thinking + reasoning_content, system_fingerprint=b9128-856c3adac, prompt 278 tok/s + predict 48 tok/s. Hot-fixes carried during UAT: c75bf6b (entrypoint→onstart in payload — Vast API has no entrypoint field, vast-cli coerces at api/instances.py:85), 4896004 (drop apt-get install curl debconf hang; add optional POD_DEBUG_SSH_PUBLIC_KEY inline sshd for operator realtime debug + -p 22:22 docker port mapping), 19a66a3 (rename env generic). Cleanup PR2 (064702e) deleted pod/Dockerfile + emerg-bootstrap.sh + build-pod.yml (-404 lines). **Known gap:** SC-2 cold-start P90 ≤6min NOT met (actual 20m 58s — 16.74 GB WAN download Hetzner DE → Spain ES @ 14 MB/s dominant); arch follow-ups (Vast volumes + host pin, image pre-bake, geo-filter offers) tracked in 06-06-SUMMARY.md, not Phase 6 blocker. Phase 6.5 HUMAN-UAT now unblocked.
+- **Phase 6.5 (ex-Phase 6):** 10/11 plans executed (06.5-01..06.5-10 GREEN + summaries — renomeados de 06-* em 2026-05-16). 06.5-11 is `autonomous: false` HUMAN-UAT — Tasks 1+2 done (06.5-HUMAN-UAT.md + docs/RUNBOOK-EMERGENCY-POD.md created, commit 2b539fc); Task 3 is a **blocking** human-verify checkpoint (6 LIVE Vast.ai UAT scenarios, ~R$10-15) — **UNBLOCKED 2026-05-17** by Phase 6 close (runtype=args end-to-end validated). No 06.5-11-SUMMARY.md, no 06.5-VERIFICATION.md yet.
   - **Integration tests (emerg suite): RESOLVED 2026-05-14.** First real CI run of `gateway/internal/integration_test/emerg_*` (Phase 6.5 deferred them to CI runtime — never executed before) failed 8 tests. 3 root causes found+fixed via `/gsd-debug`: (1) `freshSchema` missing `emergency_lifecycles` TRUNCATE → cross-test DB contamination (commit 9772d71); (2) stale Plan 06.5-05 force-provision/D-C5 test assertions vs reconciler evolved by 06.5-06+ (commit 355843b); (3) re-trigger oscillation race — `offer_race_lost` abort returned FSM straight to Healthy instead of Cooldown, `evaluateHealthy` re-fired the trigger every tick — fixed via new `ProvisionFailureCooldownSeconds` config (commit 85ba3da). All 22 emerg integration tests GREEN in CI run 25891568768 (build-gateway, develop). Debug sessions: `.planning/debug/emerg-integration-tests-ci.md` + `.planning/debug/emerg-bid-race-lost.md`.
 
 - **Phases 7–10:** Not started (no phase directories).
@@ -46,8 +46,8 @@ Next autonomous-eligible work: Phase 07 (Observability — Dashboard & Alerting)
 
 ## Performance Metrics
 
-- **Phases completed:** 5 / 11 (1–5 on disk; Phase 6 novo SEED-001 em CONTEXT; Phase 6.5 plans done, pending human UAT bloqueado por Phase 6)
-- **Plans completed:** 56 / 61 (Phase 1: 9/9 · Phase 2: 8/9, 02-09 deferred · Phase 3: 8/8 · Phase 4: 9/9 · Phase 5: 8/8 · Phase 6: 4/7, 06-02/06-03/06-04/06-05 done — Wave 4 06-06 HUMAN-UAT + Wave 5 PR2 06-07 pending · Phase 6.5: 10/11, 06.5-11 human UAT)
+- **Phases completed:** 6 / 11 (1–6 on disk; Phase 6.5 plans done, human UAT now UNBLOCKED by Phase 6 close)
+- **Plans completed:** 59 / 61 (Phase 1: 9/9 · Phase 2: 8/9, 02-09 deferred · Phase 3: 8/8 · Phase 4: 9/9 · Phase 5: 8/8 · Phase 6: 7/7, all GREEN with SC-2 perf gap noted · Phase 6.5: 10/11, 06.5-11 human UAT now unblocked)
 - **v1 requirements covered by executed plans:** POD-01..07, GW-01..10, TEN-01..09, RES-01..08, LSH-01..05, PRV-01..10 — 49/70 (remaining: OBS-01..08, INT-01..06, PRD-01..07 in Phases 7-10)
 
 ## Accumulated Context

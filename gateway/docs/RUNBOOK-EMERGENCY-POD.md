@@ -422,38 +422,52 @@ Strategy A bug where sshd was PID 1 and llama-server crashes were invisible
 
 ## Reverting to Strategy A (legacy custom image)
 
-> **DEPRECATED — read carefully before using this path.**
+**NO LONGER POSSIBLE via config rollback.** PR2 (Phase 6 plan 06-07) deleted:
 
-While PR1 (plans 06-01..06-06) is merged on `develop` but PR2 (plan 06-07
-cleanup) is NOT yet merged, the legacy custom image
-`ghcr.io/ifixtelecom/ifix-ai-pod` still exists in GHCR and the Dockerfile
-+ workflow `pod/Dockerfile` + `.github/workflows/build-pod.yml` are still
-in the repo. Operator can revert to Strategy A by:
+- `pod/Dockerfile`
+- `pod/scripts/emerg-bootstrap.sh`
+- `.github/workflows/build-pod.yml`
 
-1. Edit Portainer stack `ai-gateway-dev` env:
-   - Add `EMERGENCY_POD_IMAGE_TAG=latest-dev` (or `v1.0`).
-   - Set `EMERGENCY_TEMPLATE_IMAGE=ghcr.io/ifixtelecom/ifix-ai-pod:latest-dev`.
-   - Clear `EMERGENCY_JINJA_TEMPLATE_KEY=""` + `EMERGENCY_JINJA_TEMPLATE_SHA256=""`
-     (Strategy A image already has Jinja baked in `/app/templates/`).
-2. **WARNING:** the gateway code (`lifecycle.go` post-Phase-6) still uses
-   `Runtype=args` + `Entrypoint=/bin/bash` — it WILL NOT magically switch
-   to `Runtype=ssh`. If the legacy image's ENTRYPOINT relied on sshd as
-   PID 1 (it did), this hybrid will likely break. **The only TRUE rollback
-   path post-Phase-6 is `git revert` of the PR1 commits + redeploy.**
+To revert to Strategy A:
 
-After PR2 merges (custom image GHCR deleted, Dockerfile + workflow removed):
+1. `git revert <PR2-merge-commit>` to restore Dockerfile + script + workflow.
+2. `git revert <PR1-merge-commit>` to restore `Cfg.EmergencyPodImageTag` +
+   `lifecycle.go` Strategy A `buildCreateRequest` (Runtype=ssh + baked-image
+   CMD path).
+3. CI re-builds `ghcr.io/ifixtelecom/ifix-ai-pod:latest-dev` (if GHCR package
+   still exists — see GHCR cleanup section below).
+4. Portainer ai-gateway-dev env: change `EMERGENCY_TEMPLATE_IMAGE` back to
+   `EMERGENCY_POD_IMAGE_TAG=latest-dev`.
+5. Restart gateway container.
 
-- The Strategy A rollback path above becomes **impossible** — GHCR pulls
-  will 404.
-- Rollback requires `git revert` of PR1 + push to develop + Portainer
-  webhook redeploy with the reverted image, AND restoring the deleted
-  custom image (requires `pod/Dockerfile` + workflow file restoration from
-  git history and a manual CI run to push `:latest-dev` back to GHCR).
-- This section will be **removed** from the runbook when PR2 merges
-  (PLAN 06-07 SUMMARY check).
+Total rollback time: ~30 min (vs ~2 min for config-only rollback that was
+available before PR2).
 
-Risk acknowledgement: PR2 is gated on `06-HUMAN-UAT.md` 3/3 GREEN lifecycles.
-If UAT fails, PR2 stays unmerged and the Strategy A rollback path stays open.
+**Pre-PR2 rollback path (config-only):** documented for historical reference
+but no longer applicable. Operator who needs custom image must follow the
+`git revert` path above.
+
+Risk acknowledgement: PR2 gate (`06-HUMAN-UAT.md` PR2 GO) was satisfied by
+Lifecycle 39 GREEN on Vast 4090 Spain (commit eaa6188); see
+`.planning/phases/06-emergency-pod-template-refactor/06-06-SUMMARY.md` for
+empirical evidence. If a Strategy-B-specific bug surfaces post-merge, the
+`git revert` path above is the documented escape hatch.
+
+## GHCR Cleanup (optional, post-2-week-observability-window)
+
+`ghcr.io/ifixtelecom/ifix-ai-pod` package on GitHub Container Registry was
+NOT deleted by PR2 — it remains as a safety net during the 2-week
+observability window after PR2 merge. After confidence in Strategy B is
+established (2 weeks of stable emergency lifecycles), operator can free the
+namespace:
+
+```bash
+gh api -X DELETE /orgs/ifixtelecom/packages/container/ifix-ai-pod
+```
+
+After this command runs, `git revert` rollback (above) will fail at step 3
+(CI re-build needs the package to exist for the build/push to land) unless
+operator also re-creates the GHCR package and re-pushes manually.
 
 ---
 
@@ -475,6 +489,9 @@ for full context:
 - `06-VALIDATION.md` — Wave 0..4 verification gates
 - `06-06-PLAN.md` + `06-HUMAN-UAT.md` — burnt-bridge mitigation gate (live UAT)
 - `06-07-PLAN.md` — PR2 cleanup (delete custom image artifacts) — BLOCKED until UAT 3/3 GREEN
+- PR2 (2026-05-17): deleted `pod/Dockerfile`, `pod/scripts/emerg-bootstrap.sh`,
+  `.github/workflows/build-pod.yml`. Strategy A no longer reversible without
+  `git revert`. See "Reverting to Strategy A (legacy custom image)" above.
 
 ---
 

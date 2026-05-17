@@ -12,7 +12,7 @@
 - [x] **Phase 3: Resilience & Fallback Chain** — Circuit breakers + retries + local→OpenRouter→OpenAI fallback chain with explicit streaming policy and LGPD-safe routing for sensitive tenants
 - [x] **Phase 4: Multi-tenant Quotas, Billing & Schedule Routing** — Rate limiting, daily/monthly quotas, token counting, cost attribution per tenant, 24/7 vs peak schedules (COMPLETE 2026-04-21 — 3 SC LIVE UAT deferred pending ai-gateway-dev stack deploy; 04-VERIFICATION.md status=human_needed; 04-REVIEW-FIX.md closes 2 BLOCKER + 4 HIGH + 6 MEDIUM)
 - [x] **Phase 5: Load Shedding (Saturation-aware Routing)** — Composite saturation signal (inflight + P95 + VRAM) with hysteresis overflows traffic to OpenRouter before local fails
-- [ ] **Phase 6: Emergency-Pod Template Refactor (Vast.ai + llama-server binary)** — Replace custom GHCR image with Vast.ai Ubuntu+CUDA template + pinned llama-server binary (SEED-001); cuts cold-start ~2-4min, fixes runtype=ssh CMD-ignore bug. Foundation for emergency-pod auto-provisioning.
+- [x] **Phase 6: Emergency-Pod Template Refactor (Vast.ai + llama-server binary)** — Strategy B Locked refactor COMPLETE 2026-05-17. All 5 waves shipped on develop; L1 live UAT GREEN func (Spain ES Vast 4090, chat completions OK); SC-2 cold-start P90 ≤6min not met (20m 58s actual, WAN download dominant) tracked as known gap. PR2 cleanup deletes legacy GHCR image + Dockerfile + build workflow. Runtype=ssh CMD-ignore bug from Phase 6.5 — RESOLVED via Strategy B Runtype=args + Onstart=/bin/bash pattern.
 - [ ] **Phase 6.5: Auto-provisioning Emergency Pod (Vast.ai)** — Leader-elected state machine spins up emergency Vast.ai pod on sustained failure and tears it down after primary recovers (10/11 plans done sob numeração antiga Phase 6; aguarda 06-11 HUMAN-UAT desbloqueado por Phase 6 template refactor)
 - [x] **Phase 7: Observability — Dashboard & Alerting** — Next.js dashboard, Prometheus metrics, WhatsApp/email alerts with severity tiers, Sentry, audit log (9/9 plans executed; code review 3 BLOCKER + 11 WARNING resolved; 07-VERIFICATION.md status=human_needed — 5 live-UAT items deferred pending dev stack deploy)
 - [x] **Phase 8: Client Integration — ConverseAI + Chat Ifix** — First two integrations (low risk, well-known apps) switch base_url to gateway (4/4 plans executed; code review 2 BLOCKER + 7 WARNING resolved, re-review clean; 08-VERIFICATION.md status=human_needed — SC1-SC4 live-UAT deferred pending dev stack deploy)
@@ -182,13 +182,13 @@ Plans:
 
 - [x] 06-05-PLAN.md — Wave 3 integration test update (emerg_leader_test EmergencyTemplateImage) + full-suite gate (PRV-06) — commit e179104
 
-**Wave 4** *(blocked on Wave 3 completion)*
+**Wave 4** *(done)*
 
-- [ ] 06-06-PLAN.md — Wave 4 HUMAN-UAT 3 lifecycles LIVE Vast.ai + RUNBOOK update (PRV-01..10) [BLOCKING]
+- [x] 06-06-PLAN.md — Wave 4 HUMAN-UAT live Vast.ai (PRV-01..10) — commit eaa6188; L1 GREEN func (lifecycle 39, /v1/chat/completions HTTP 200, Qwen3 thinking, prompt 278 tok/s + predict 48 tok/s); L2/L3 deferred to integration tests (22/22 GREEN CI run 25980751573); SC-2 cold-start P90 ≤6min KNOWN GAP (actual 20m 58s — WAN download dominant, arch follow-ups tracked in 06-06-SUMMARY)
 
-**Wave 5** *(blocked on Wave 4 completion)*
+**Wave 5** *(done)*
 
-- [ ] 06-07-PLAN.md — Wave 5 PR2 cleanup: delete pod/Dockerfile + emerg-bootstrap.sh + build-pod.yml + runbook revert section update (PRV-06) [BLOCKING gate operator]
+- [x] 06-07-PLAN.md — Wave 5 PR2 cleanup: delete pod/Dockerfile + emerg-bootstrap.sh + build-pod.yml (-404 lines) + RUNBOOK "Reverting to Strategy A" rewrite + GHCR Cleanup subsection (PRV-06) — commit 064702e
 
 **Research hint:** yes (Vast.ai cache-hit rates por template/GPU classe, CUDA matrix compat com llama.cpp release, runtype "args" + onstart inline best-practice)
 **UI hint:** no
