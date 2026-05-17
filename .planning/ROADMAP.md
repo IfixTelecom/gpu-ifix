@@ -198,20 +198,21 @@ Plans:
 **Goal:** Refactor primary pod to Strategy B Full-Stack pattern: upstream images + inline bash bootstrap + Vast.ai Runtype=args + schedule-based lifecycle. Eliminate custom GHCR `ifix-ai-pod` image dependency (gap left by Phase 6 PR2 deletes), drop health-bridge (D-05), keep DCGM exporter (D-07), add schedule env vars (D-08).
 **Requirements**: (refactor only — herda POD-01..07 via implementação diferente; tracked via D-01..D-10 decisions em 06.6-CONTEXT.md)
 **Depends on:** Phase 6
-**Plans:** 12 plans
+**Plans:** 13 plans (reviews 2026-05-17: split 06 into 06a+06b per consensus action #1)
 
 Plans:
 
 - [ ] 06.6-01-PLAN.md — Wave 0 spikes (DinD privileged + Qwen3.6 Jinja) + 4 image SHA pins + WAVE0-GATES.md operator lock doc
 - [ ] 06.6-02-PLAN.md — Extract vastutil shared helpers (FilterBelowCap, ExcludeHost, MustEventJSON, PgInt8, PgNumericFromFloat, CaptureBreadcrumb, BestEffortDestroy) from emerg/lifecycle.go
-- [ ] 06.6-03-PLAN.md — Add 22 Primary* config fields (PrimaryTemplateImage + 3 sidecar images + 3 weight key/sha pairs + 6 schedule fields + 4 lifecycle fields)
-- [ ] 06.6-04-PLAN.md — gateway/internal/primary/ scaffolding: onstart.go (raw-string Go const ~3.3KB) + lifecycle.go (buildCreateRequest Strategy B 4-services DinD) + 11 unit tests
-- [ ] 06.6-05-PLAN.md — primary/schedule.go (ScheduleRule + ParseScheduleEnv + IsInPeak + NextTransition; Pitfall #4 DST fail-fast) + primary/fsm.go (5-state atomic CAS)
-- [ ] 06.6-06-PLAN.md — primary/reconciler.go (5-state evaluateTick + drain ramp-down + leader-election) + primary/budget.go + extend upstreams.Loader (3-role) + dcgm.Scraper.SetURL + shed.InflightRegistry.Count
-- [ ] 06.6-07-PLAN.md — Migration 0023_primary_lifecycles.sql + sqlc queries + redisx/primary.go (gw:primary:events + gw:primary:lock namespace)
+- [ ] 06.6-03-PLAN.md — Add 24 Primary* config fields (incl PrimaryPodScheduleProvisionLeadSeconds per reviews #8 pre-warm offset + PrimaryProvisionFailureCooldownSeconds + SHA-pinned image defaults)
+- [ ] 06.6-04-PLAN.md — gateway/internal/primary/ scaffolding: onstart.go (shell hardening per reviews #7: set -euo without x, quoted env, required env guards) + lifecycle.go (buildCreateRequest + SHA fail-fast precondition gate per reviews #6) + 17+ unit tests
+- [ ] 06.6-05-PLAN.md — primary/schedule.go (ScheduleRule + IsInPeak with overnight wrap day-filter fix per reviews #5 + ShouldBeProvisioned with pre-warm offset per reviews #8 + NextTransition) + primary/fsm.go (5-state atomic CAS)
+- [ ] 06.6-06a-PLAN.md — primary/reconciler.go (5-state evaluateTick + drain + leader election + event subscriber for force-up/force-down per reviews #3 + restart recovery per reviews #4 + Vast status_msg error check per reviews #11) + primary/budget.go (Pitfall #12)
+- [ ] 06.6-06b-PLAN.md — external adapters: upstreams.Loader 3-role override + dcgm.Scraper.SetURL via sync.RWMutex per reviews #13 + shed.InflightRegistry.Count
+- [ ] 06.6-07-PLAN.md — Migration (sequence # COMPUTED at exec time per reviews #10) + 6 sqlc queries (incl GetOpenPrimaryLifecycle for reviews #4 restart recovery) MANDATORY sqlc generate per reviews #9 + redisx/primary.go
 - [ ] 06.6-08-PLAN.md — main.go wiring primary.Reconciler.Start + emerg.SubscribePrimaryEvents (Pitfall #11 primary precedence)
 - [ ] 06.6-09-PLAN.md — gatewayctl primary state|force-up|force-down|schedule|lifecycles CLI subcommands
-- [ ] 06.6-10-PLAN.md — Integration tests (primary_probe + primary_leader + primary_cancel_inflight + primary_emerg_coexist for Pitfall #11)
+- [ ] 06.6-10-PLAN.md — Integration tests (probe + leader + cancel + emerg_coexist + disabled_force_up per reviews #2 + overnight_schedule per reviews #5 + restart_recovery per reviews #4 + lifecycles_cli BLOCKER 3)
 - [ ] 06.6-11-PLAN.md — Live Vast.ai UAT (6 scenarios: provision, tool-calling, STT, embed, drain, emerg coexist) + RUNBOOK-PRIMARY-POD.md
 - [ ] 06.6-12-PLAN.md — PR3 cleanup: delete pod/onstart.sh + pod/docker-compose.yml + pod/health-bridge/ + pod/scripts/download-weights.sh; rewrite pod/README.md as redirect
 
