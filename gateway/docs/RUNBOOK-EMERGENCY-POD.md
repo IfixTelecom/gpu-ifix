@@ -1,9 +1,20 @@
-# Emergency Pod Runbook — Phase 6 (Vast.ai Auto-provisioning)
+# Emergency Pod Runbook — Phase 6 (Vast.ai Auto-provisioning, Strategy B)
 
 **Owner:** IFIX Platform Engineering
-**Last updated:** 2026-05-13
+**Last updated:** 2026-05-16 (Phase 6 refactor — Strategy B Locked)
 **Stack:** `ai-gateway-dev` / `ai-gateway-prod` (Portainer)
-**Phase reference:** `.planning/phases/06-auto-provisioning-emergency-pod-vast-ai/06-CONTEXT.md`
+**Phase reference (active):** `.planning/phases/06-emergency-pod-template-refactor/06-CONTEXT.md`
+**Phase reference (historical Phase 6.5 — autoprov bootstrap):** `.planning/phases/06.5-auto-provisioning-emergency-pod-vast-ai/06.5-CONTEXT.md`
+
+> **Strategy B in effect (2026-05-16).** Emergency pods agora rodam a image
+> upstream oficial `ghcr.io/ggml-org/llama.cpp:server-cuda-b9128` (HF-endorsed)
+> com `Runtype=args` + onstart inline via `--entrypoint /bin/bash --args -c`.
+> A custom image `ghcr.io/ifixtelecom/ifix-ai-pod` foi DEPRECATED — será
+> deletada quando PR2 (plan 06-07) merge. Detalhes do refactor + rationale:
+> [Image source (Strategy B)](#image-source-strategy-b),
+> [Onstart behavior (inline args)](#onstart-behavior-inline-args),
+> [Reverting to Strategy A (legacy custom image)](#reverting-to-strategy-a-legacy-custom-image),
+> [Phase 6 refactor — appendix](#phase-6-refactor--appendix).
 
 This runbook covers the Phase 6 emergency-pod auto-provisioning subsystem
 (`gateway/internal/emerg/` + `gateway/cmd/gatewayctl/emerg.go`). Read this when:
@@ -234,7 +245,7 @@ integer-only (`7days` errors, `7d12h` errors — use `180h` instead).
 
 1. Open Portainer: <https://portainer3.ifixtelecom.com.br>.
 2. Stacks → `ai-gateway-dev` (or `ai-gateway-prod`) → Editor.
-3. Add/update the **11 Phase 6 env vars** in the stack environment block:
+3. Add/update the **14 Phase 6 env vars** in the stack environment block:
 
    | Env var                                  | Value (Wave-0 accepted default) | Source / decision                                  |
    | ---------------------------------------- | ------------------------------- | -------------------------------------------------- |
@@ -242,7 +253,11 @@ integer-only (`7days` errors, `7d12h` errors — use `180h` instead).
    | `VAST_PRICE_CAP_DPH`                     | `0.40`                          | D-A2 — RTX 4090 cap; epsilon `cap+0.0001` (Pitfall 5) |
    | `MONTHLY_EMERGENCY_BUDGET_BRL`           | `200`                           | D-D2 — Sentry WARNING only, NO auto-block          |
    | `USD_TO_BRL_RATE`                        | `5.0`                           | D-D4 — operator updates quarterly                  |
-   | `EMERGENCY_POD_IMAGE_TAG`                | `v1.0`                          | Phase 1 publishes `:v1.0` and `:latest`            |
+   | **`EMERGENCY_TEMPLATE_IMAGE`**           | `ghcr.io/ggml-org/llama.cpp:server-cuda-b9128` | **Phase 6 D-01-B (Strategy B)** — HF-endorsed upstream image; tag SHA-pinned per ggml-org build |
+   | **`EMERGENCY_JINJA_TEMPLATE_KEY`**       | `emerg-onstart/templates/qwen3.5-27b-tool-calling-1067302cc6d927210a84775b9a060f724da15debc168c79710cbf763512e9f67.jinja` | **Phase 6 D-04-B B2** — MinIO fetch in onstart |
+   | **`EMERGENCY_JINJA_TEMPLATE_SHA256`**    | `1067302cc6d927210a84775b9a060f724da15debc168c79710cbf763512e9f67` | **Phase 6 D-04-B B2** — sha256-verify before exec |
+   | **`EMERGENCY_LLAMA_ARGS`**               | (empty)                         | **Phase 6 D-07-B** — CSV/JSON args override; empty → lifecycle.go uses hardcoded const |
+   | ~~`EMERGENCY_POD_IMAGE_TAG`~~            | ~~`v1.0`~~                      | **DEPRECATED — Strategy A only; REMOVE from stack post-Phase-6 deploy** |
    | `PROVISION_TRIGGER_FAILED_OVER_SECONDS`  | `120`                           | D-C1 — bate SC-1 example "e.g., 2 min"             |
    | `PROVISION_HEALTHY_DURATION_SECONDS`     | `300`                           | D-D1 — primary healthy this long before cutback    |
    | `PROVISION_IDLE_GRACE_SECONDS`           | `300`                           | D-D1 — emergency pod idle grace before destroy     |
@@ -250,10 +265,14 @@ integer-only (`7days` errors, `7d12h` errors — use `180h` instead).
    | `PRIMARY_HOST_ID`                        | `0`                             | D-A2 — host_id != filter only when known (≠0)      |
    | `VAST_API_QPS_LIMIT`                     | `1`                             | RESEARCH OQ-12 — conservative 1 req/s token bucket |
 
-   The 5 highlighted in **06-WAVE0-GATES.md** are the operator decisions;
-   the other 6 are timing knobs that Brazilian-business-hours operators
-   should review periodically (especially the `PROVISION_TRIGGER_*` for
-   under-load tuning).
+   The 4 highlighted (**bold**) are Strategy B fields introduced in Phase 6
+   refactor and override the old `EMERGENCY_POD_IMAGE_TAG`. Remove the
+   strikethrough `EMERGENCY_POD_IMAGE_TAG` entirely from the stack after
+   the Phase 6 image is deployed — `config.go` no longer reads it.
+
+   See [Image source (Strategy B)](#image-source-strategy-b) and
+   [Onstart behavior (inline args)](#onstart-behavior-inline-args) for what
+   these vars wire into.
 
 4. Hit **Update the stack** → triggers webhook → Portainer pulls new
    image via the GitHub Actions `develop` (or `main`) build label.
@@ -305,6 +324,157 @@ unset (or `=""`) in the Portainer stack. The boot logs will show
 reconciler stays nil. The dispatcher's `EmergTraffic` field stays nil and
 `emerg.IsActive()` is never reached. Migration 0019 still runs (the empty
 table is idle-cheap).
+
+---
+
+## Image source (Strategy B)
+
+Phase 6 refactor (2026-05-16) trocou a source da emergency-pod image:
+
+| Aspect            | Strategy A (legacy, pre-Phase-6)                | Strategy B (current, post-Phase-6)                                     |
+| ----------------- | ------------------------------------------------ | ----------------------------------------------------------------------- |
+| Image             | `ghcr.io/ifixtelecom/ifix-ai-pod:latest-dev`     | `ghcr.io/ggml-org/llama.cpp:server-cuda-b9128`                          |
+| Owner             | Custom (IFIX-built via `pod/Dockerfile`)         | Upstream (ggml-org, official, HF-endorsed)                              |
+| Size              | ~6 GB (baked: llama-server + Jinja + sshd)       | ~3 GB (baked: llama-server only; weights+Jinja fetched at onstart)      |
+| ENTRYPOINT        | `/usr/sbin/sshd -D` (Runtype=ssh injection)      | `/app/llama-server` (preserved via Runtype=args)                        |
+| Build pipeline    | GHCR via `.github/workflows/build-pod.yml`       | None (upstream pull at provision time)                                  |
+| Pinning           | Mutable tag (`:latest-dev` / `:v1.0`)            | Build-pinned tag (`:server-cuda-b9128`); operator may pin harder via `@sha256:...` |
+| Env var driver    | `EMERGENCY_POD_IMAGE_TAG`                        | `EMERGENCY_TEMPLATE_IMAGE` (full image ref incl. tag)                   |
+
+**Why upstream:** HuggingFace officially endorsed llama.cpp as TGI replacement
+(2026-03-21) — ggml-org publishes server-cuda variants to GHCR per release.
+Strategy B inherits HF security review + upstream provenance without rebuild
+ceremony. Custom image was the only legacy reason `Runtype=ssh` ever existed,
+and Runtype=ssh caused the CMD-ignore bug (`STATE.md:85`, lifecycles 29-33
+travados em `health_timeout 1800s`). Strategy B fixes both.
+
+### Bumping the image tag
+
+To upgrade to a newer llama.cpp build (e.g., `b9300`):
+
+```bash
+# 1. Find the desired tag on ggml-org GHCR:
+#    https://github.com/ggml-org/llama.cpp/pkgs/container/llama.cpp
+#    Filter "server-cuda-*" — pick build that includes Qwen3 chat-template fixes.
+# 2. (RECOMMENDED) Pin via digest for immutability:
+docker manifest inspect ghcr.io/ggml-org/llama.cpp:server-cuda-b9300 \
+  | jq -r '.manifests[] | select(.platform.architecture=="amd64").digest'
+# Outputs: sha256:abc123...
+
+# 3. Update Portainer stack ai-gateway-dev:
+#    EMERGENCY_TEMPLATE_IMAGE=ghcr.io/ggml-org/llama.cpp@sha256:abc123...
+# 4. Hit "Update the stack" — next emergency pod uses the new tag.
+# 5. Validate via short UAT (1 force-provision + force-destroy cycle).
+```
+
+No code change, no gateway rebuild, no redeploy outside Portainer env edit.
+
+---
+
+## Onstart behavior (inline args)
+
+Strategy B sends the bootstrap **inline** via Vast.ai's `CreateInstance`
+payload rather than baking a script into the image:
+
+```go
+// Excerpt from gateway/internal/emerg/lifecycle.go (buildCreateRequest)
+vast.CreateRequest{
+    Image:       cfg.EmergencyTemplateImage,         // "ghcr.io/ggml-org/llama.cpp:server-cuda-b9128"
+    Disk:        40,                                  // GB — 06-WAVE0-GATES.md Decision 1
+    Runtype:     "args",                              // PRESERVES image ENTRYPOINT semantics
+    Entrypoint:  "/bin/bash",                         // REQUIRED override per 06-SPIKE-runtype-args.md Round 2
+    Args:        []string{"-c", emergencyOnstart},   // 2 elements; bash receives the inline script
+    Env:         emergencyEnvMap,                     // MinIO creds + Jinja key/sha + weights metadata
+}
+```
+
+The `emergencyOnstart` raw-string (lifecycle.go) does, in order:
+
+1. **`set -e`** + log timestamps to stdout (captured by `vastai logs`).
+2. **`mc`/`curl` Qwen weights** from `s3.ifixtelecom.com.br/ai-gateway/<WEIGHTS_QWEN_KEY>`
+   with **`sha256sum -c`** verification (pattern from Phase 1 D-05, reused 1:1).
+3. **`mc` Jinja template** from
+   `s3.ifixtelecom.com.br/ai-gateway/$EMERGENCY_JINJA_TEMPLATE_KEY` with
+   `sha256sum -c` against `$EMERGENCY_JINJA_TEMPLATE_SHA256`. Skipped if
+   the key env is empty (legacy/test mode — operator must ensure image
+   has bundled template OR llama-server falls back to default).
+4. **`exec /app/llama-server --host 0.0.0.0 --port 8000 -m /weights/qwen/model.gguf
+   -ngl 99 -np 2 --ctx-size 16384 --jinja --chat-template-file <path>`**.
+
+The `exec` is critical: bash overlays itself with llama-server, so
+**llama-server becomes PID 1** in the container. Crash detection works
+cleanly (PID 1 dies → container dies → Vast.ai marks failure → reconciler's
+post-create polling observes terminal status → audit row closes with
+`shutdown_reason='instance_terminal_state'`). This is the inverse of the
+Strategy A bug where sshd was PID 1 and llama-server crashes were invisible
+(STATE.md:85 root cause).
+
+### Inline limits
+
+- `args[-c "<script>"]` token budget: Vast API limit ~4048 chars total.
+  Current script is ~1400 chars (06-SPIKE-runtype-args.md Round 2 used 250
+  chars; full onstart is ~1400). Comfortable margin.
+- No external script storage required (vs Strategy A's `pod/scripts/emerg-bootstrap.sh`
+  baked into the image). Iteration loop: edit lifecycle.go raw-string → rebuild
+  gateway (only) → next emergency uses new bash.
+
+---
+
+## Reverting to Strategy A (legacy custom image)
+
+> **DEPRECATED — read carefully before using this path.**
+
+While PR1 (plans 06-01..06-06) is merged on `develop` but PR2 (plan 06-07
+cleanup) is NOT yet merged, the legacy custom image
+`ghcr.io/ifixtelecom/ifix-ai-pod` still exists in GHCR and the Dockerfile
++ workflow `pod/Dockerfile` + `.github/workflows/build-pod.yml` are still
+in the repo. Operator can revert to Strategy A by:
+
+1. Edit Portainer stack `ai-gateway-dev` env:
+   - Add `EMERGENCY_POD_IMAGE_TAG=latest-dev` (or `v1.0`).
+   - Set `EMERGENCY_TEMPLATE_IMAGE=ghcr.io/ifixtelecom/ifix-ai-pod:latest-dev`.
+   - Clear `EMERGENCY_JINJA_TEMPLATE_KEY=""` + `EMERGENCY_JINJA_TEMPLATE_SHA256=""`
+     (Strategy A image already has Jinja baked in `/app/templates/`).
+2. **WARNING:** the gateway code (`lifecycle.go` post-Phase-6) still uses
+   `Runtype=args` + `Entrypoint=/bin/bash` — it WILL NOT magically switch
+   to `Runtype=ssh`. If the legacy image's ENTRYPOINT relied on sshd as
+   PID 1 (it did), this hybrid will likely break. **The only TRUE rollback
+   path post-Phase-6 is `git revert` of the PR1 commits + redeploy.**
+
+After PR2 merges (custom image GHCR deleted, Dockerfile + workflow removed):
+
+- The Strategy A rollback path above becomes **impossible** — GHCR pulls
+  will 404.
+- Rollback requires `git revert` of PR1 + push to develop + Portainer
+  webhook redeploy with the reverted image, AND restoring the deleted
+  custom image (requires `pod/Dockerfile` + workflow file restoration from
+  git history and a manual CI run to push `:latest-dev` back to GHCR).
+- This section will be **removed** from the runbook when PR2 merges
+  (PLAN 06-07 SUMMARY check).
+
+Risk acknowledgement: PR2 is gated on `06-HUMAN-UAT.md` 3/3 GREEN lifecycles.
+If UAT fails, PR2 stays unmerged and the Strategy A rollback path stays open.
+
+---
+
+## Phase 6 refactor — appendix
+
+Refactored 2026-05-16 from Strategy A (custom GHCR image
+`ghcr.io/ifixtelecom/ifix-ai-pod` + `Runtype=ssh` — bug STATE.md:85
+CMD-ignore) to Strategy B (`ghcr.io/ggml-org/llama.cpp:server-cuda-b9128`
+upstream + `Runtype=args` + inline onstart via
+`--entrypoint /bin/bash --args -c`). See
+[`.planning/phases/06-emergency-pod-template-refactor/`](../../.planning/phases/06-emergency-pod-template-refactor/)
+for full context:
+
+- `06-CONTEXT.md` — Strategy B Locked decisions (D-01-B through D-08-B-risk)
+- `06-RESEARCH.md` — HF endorsement of llama.cpp + upstream image rationale
+- `06-SPIKE-runtype-args.md` — empirical validation Round 1+2 (Sichuan offer 33453594)
+- `06-WAVE0-GATES.md` — operator decisions: Jinja B2-40GB, MinIO key/sha, args revised pattern
+- `06-PATTERNS.md` — code patterns (raw-string Go onstart, sha256 verify reuse)
+- `06-VALIDATION.md` — Wave 0..4 verification gates
+- `06-06-PLAN.md` + `06-HUMAN-UAT.md` — burnt-bridge mitigation gate (live UAT)
+- `06-07-PLAN.md` — PR2 cleanup (delete custom image artifacts) — BLOCKED until UAT 3/3 GREEN
 
 ---
 
@@ -541,6 +711,54 @@ curl -s https://vast.ai/status
   current provisioning attempt and waits for the next trigger
   (Pitfall 6 health/ports null-safety; bid race retry 3x exp backoff).
 
+### Strategy B onstart failed (`actual_status=running` but `:8000/v1/models` refused)
+
+**Symptom:** Vast.ai dashboard mostra `actual_status=running` mas
+`curl http://<pod_url>:8000/v1/models` retorna `connection refused` ou
+timeout. Reconciler health-poll falha, FSM eventualmente vai pra
+`shutdown_reason='health_timeout'`.
+
+**Root cause (Strategy B specific):** onstart bash script falhou ANTES
+de chegar no `exec /app/llama-server`. Possíveis pontos de falha:
+
+- `mc cp` Qwen weights timeout (MinIO slow ou rede instável)
+- `sha256sum -c` falhou (weights ou Jinja com hash divergente)
+- `mc` install falhou (apt error transitório)
+
+**Diagnosis:**
+
+```bash
+# Strategy B NÃO permite `vastai ssh <id>` — Runtype=args desabilita
+# SSH injection no host Vast. Debug é via vastai logs:
+INST=$(docker exec ai-gateway-dev_gateway psql "$AI_GATEWAY_PG_DSN" -t -c \
+  "SELECT vast_instance_id FROM ai_gateway.emergency_lifecycles WHERE ended_at IS NULL;" | xargs)
+vastai logs $INST | tail -200
+
+# Procurar:
+#   - "sha256sum: WARNING: 1 computed checksum did NOT match" — hash mismatch
+#   - "ERROR: pulling from Minio failed" — MinIO connectivity
+#   - "apt-get install: failed" — package install (rare; image já tem curl)
+#   - Pulse exit antes de "version: 9128" — onstart bash exited
+```
+
+**Action:**
+
+- **sha256 mismatch:** verificar `WEIGHTS_QWEN_SHA256` (config) vs hash
+  real do arquivo em MinIO:
+  ```bash
+  mc cat ifix/ai-gateway/<WEIGHTS_QWEN_KEY> | sha256sum
+  ```
+  Se hash do MinIO != hash do config, alguém atualizou o arquivo sem bumpar
+  config. Atualizar `WEIGHTS_QWEN_SHA256` env no Portainer stack + redeploy.
+  Mesmo padrão pra Jinja: `EMERGENCY_JINJA_TEMPLATE_SHA256` vs
+  `mc cat ifix/ai-gateway/$EMERGENCY_JINJA_TEMPLATE_KEY | sha256sum`.
+- **MinIO unavailable:** check `curl https://s3.ifixtelecom.com.br/minio/health/live`
+  → HTTP 200. Se 5xx, MinIO degraded — escalate to infra. Reconciler bid race
+  retry NÃO vai ajudar (problema é network, não bid).
+- **Manual destroy + retry:**
+  `docker exec ai-gateway-dev_gateway /gatewayctl emerg force-destroy`,
+  então `force-provision` novamente após root cause fixed.
+
 ### Stuck FSM (e.g. `emergency_provisioning` for > 15min)
 
 **Symptom:** `gatewayctl emerg state` shows `state=emergency_provisioning`
@@ -567,6 +785,18 @@ ssh vps-ifix-vm 'docker logs ai-gateway-dev_gateway --since 15m 2>&1 | grep -E "
 
 **Action:**
 
+- **Strategy B Pitfall 3 — `vastai ssh <id>` does NOT work for emergency pods.**
+  With `Runtype=args`, Vast.ai documentation states explicitly: *"If you use
+  args/entrypoint launch mode, we create a container from your image as is,
+  without attempting to inject ssh and or jupyter."* (verified empirically
+  in `06-SPIKE-runtype-args.md`). For interactive debug of a stuck pod, use:
+  ```bash
+  vastai logs <instance_id>           # stdout/stderr trail
+  vastai show instance <instance_id>  # status + ports + image manifest
+  ```
+  SSH access requires re-provisioning the instance with `Runtype=ssh` (not
+  applicable for production emergency lifecycles — that path is the bug we
+  fixed).
 - If Vast `actual_status` is `running` AND ports are populated AND the
   pod's `/health` is reachable from outside the gateway, but the FSM
   is stuck — manual `force-destroy` to abandon and start fresh:
