@@ -776,13 +776,20 @@ func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vas
 		env["EMERGENCY_JINJA_TEMPLATE_KEY"] = cfg.EmergencyJinjaTemplateKey
 		env["EMERGENCY_JINJA_TEMPLATE_SHA256"] = cfg.EmergencyJinjaTemplateSHA256
 	}
+	// Vast.ai API has NO `entrypoint` JSON field; vast-cli's `--entrypoint`
+	// coerces into `onstart_cmd` (api/instances.py:85). Live UAT lifecycle
+	// 35 (2026-05-17) proved that sending `entrypoint:"/bin/bash"` is a
+	// no-op — Vast falls back to image ENTRYPOINT (llama-server) and the
+	// container exits because llama-server cannot parse `-c <script>` as
+	// flags. The working spike Round 2 pattern was actually emitting
+	// `onstart:"/bin/bash"` via CLI coercion. So Onstart MUST carry the
+	// `/bin/bash` shell, and Args=["-c", <script>] is appended by Vast.
 	return vast.CreateRequest{
 		ClientID:    "me",
 		Image:       cfg.EmergencyTemplateImage,
 		Env:         env,
-		Onstart:     "",
+		Onstart:     "/bin/bash",
 		Runtype:     "args",
-		Entrypoint:  "/bin/bash",
 		Args:        []string{"-c", onstart},
 		Disk:        40,
 		Label:       fmt.Sprintf("ifix-emerg-lifecycle-%d", lifecycleID),

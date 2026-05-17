@@ -212,7 +212,9 @@ func newReconcilerForBuildTest(jinjaKey, jinjaSHA string, llamaArgsOverride []st
 //
 //   - Image == EmergencyTemplateImage (NOT ghcr.io/ifixtelecom/ifix-ai-pod)
 //   - Runtype == "args"
-//   - Entrypoint == "/bin/bash" (REQUIRED — spike Round 2 evidence)
+//   - Onstart == "/bin/bash" (REQUIRED — live lifecycle 35 evidence;
+//     Vast API has NO `entrypoint` field, vast-cli coerces --entrypoint
+//     into onstart_cmd at api/instances.py:85)
 //   - Args has exactly 2 elements: ["-c", <onstart-script>]
 //   - Args[1] contains the inline `exec /app/llama-server` with all
 //     15 llama-server CLI flags (not in the wire Args slice — bug fix
@@ -227,7 +229,7 @@ func TestBuildCreateRequest_StrategyB_args(t *testing.T) {
 
 	require.Equal(t, "ghcr.io/ggml-org/llama.cpp:server-cuda-b9128", req.Image)
 	require.Equal(t, "args", req.Runtype)
-	require.Equal(t, "/bin/bash", req.Entrypoint)
+	require.Equal(t, "/bin/bash", req.Onstart)
 	require.Len(t, req.Args, 2, "Strategy B Locked: args=[\"-c\", <script>] only (2 elements)")
 	require.Equal(t, "-c", req.Args[0])
 	require.Contains(t, req.Args[1], "exec /app/llama-server", "onstart MUST end with exec /app/llama-server so PID 1 == llama-server (spike Round 2 pattern)")
@@ -264,10 +266,11 @@ func TestBuildCreateRequest_StrategyB_args(t *testing.T) {
 //   - Top-level "args" key present, "image_args" + "args_str" absent
 //     (VERIFIED via vast-cli/vast.py:2509 RESEARCH.md Pitfall 5 — the
 //     server only reads `args`)
-//   - "entrypoint" key present at top level
-//   - "onstart" key absent or empty (Strategy B runs the script via
-//     args=["-c", ...], NOT via the onstart field — Vast `--onstart-cmd`
-//     does not shell-wrap in args runtype per spike Round 1)
+//   - "onstart" key present at top level with value "/bin/bash"
+//     (Vast API has NO `entrypoint` field — vast-cli coerces
+//     --entrypoint into onstart_cmd; live lifecycle 35 proved that
+//     sending entrypoint:"/bin/bash" is a no-op and the container
+//     fell back to image ENTRYPOINT = llama-server, exiting on bad args)
 //   - "runtype" == "args"
 func TestBuildCreateRequest_JSONShape(t *testing.T) {
 	r := newReconcilerForBuildTest("emerg-onstart/templates/foo.jinja", "deadbeefSHA", nil)
@@ -283,7 +286,7 @@ func TestBuildCreateRequest_JSONShape(t *testing.T) {
 
 	require.Contains(t, top, "image", "top-level image key must exist")
 	require.Contains(t, top, "runtype", "top-level runtype key must exist")
-	require.Contains(t, top, "entrypoint", "top-level entrypoint key must exist (Strategy B requirement)")
+	require.Contains(t, top, "onstart", "top-level onstart key must exist (Strategy B requirement — carries /bin/bash shell)")
 	require.Contains(t, top, "args", "top-level args key must exist (Strategy B requirement)")
 	require.Contains(t, top, "env", "top-level env key must exist")
 	require.Contains(t, top, "disk", "top-level disk key must exist")
@@ -291,16 +294,13 @@ func TestBuildCreateRequest_JSONShape(t *testing.T) {
 	require.NotContains(t, top, "image_args", "wire field is `args`, NOT image_args (vast-cli/vast.py:2509)")
 	require.NotContains(t, top, "args_str", "wire field is `args`, NOT args_str")
 
-	// Onstart field — omitempty in struct, but the current DTO has it as
-	// a non-omitempty string. Assert it is empty when present.
-	if onstartRaw, ok := top["onstart"]; ok {
-		var s string
-		require.NoError(t, json.Unmarshal(onstartRaw, &s))
-		require.Empty(t, s, "Strategy B: onstart field must be empty — script lives in args[1] (Vast onstart-cmd does not shell-wrap in args runtype, spike Round 1)")
-	}
+	// Onstart MUST be /bin/bash so Vast container exec = `/bin/bash -c <script>`.
+	var onstartVal string
+	require.NoError(t, json.Unmarshal(top["onstart"], &onstartVal))
+	require.Equal(t, "/bin/bash", onstartVal, "Strategy B onstart MUST carry /bin/bash; vast wraps as `/bin/bash -c <script>` from args=[\"-c\", ...]")
 
 	require.Contains(t, js, `"runtype":"args"`, "raw JSON sanity check")
-	require.Contains(t, js, `"entrypoint":"/bin/bash"`, "raw JSON sanity check")
+	require.Contains(t, js, `"onstart":"/bin/bash"`, "raw JSON sanity check")
 }
 
 // TestBuildCreateRequest_DeterministicJSON verifies that two successive
