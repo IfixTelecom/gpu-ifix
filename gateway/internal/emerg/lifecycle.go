@@ -55,6 +55,7 @@ import (
 	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -646,51 +647,144 @@ func (r *Reconciler) bestEffortDestroy(instanceID int64) {
 	}
 }
 
+// emergencyLlamaArgsDefault is the canonical 13-flag llama-server CLI
+// invocation for the emergency pod (CONTEXT.md D-07-B, revised pattern
+// per 06-WAVE0-GATES.md Decision 4). Embedded into the onstart bash
+// script's final `exec /app/llama-server ...` line. Operator may
+// override via EMERGENCY_LLAMA_ARGS env CSV (Cfg.EmergencyLlamaArgs);
+// when overridden, this default is replaced wholesale.
+var emergencyLlamaArgsDefault = []string{
+	"--host", "0.0.0.0",
+	"--port", "8000",
+	"-m", "/weights/qwen/model.gguf",
+	"-ngl", "99",
+	"-np", "2",
+	"--ctx-size", "16384",
+	"--jinja",
+	"--chat-template-file", "/app/templates/qwen3.5-27b-tool-calling.jinja",
+}
+
+// emergencyOnstartHead is the inline bash bootstrap script (raw-string
+// Go const per Pitfall 9 RESEARCH.md:476 — ZERO fmt.Sprintf shell
+// quoting). Executes INSIDE the container before the final
+// `exec /app/llama-server ...` line, which is appended at runtime by
+// buildCreateRequest from `emergencyLlamaArgsDefault` or
+// `Cfg.EmergencyLlamaArgs`.
+//
+// Behaviour:
+//   - set -e: any failure (mc download, sha256 mismatch) aborts
+//     container with non-zero exit (T-06-03 mitigation).
+//   - mkdir directories for Qwen weights + Jinja template.
+//   - apt install mc (Bullseye base has no mc by default).
+//   - mc alias setup + Qwen weights download from MinIO.
+//   - sha256 verify Qwen against $WEIGHTS_QWEN_SHA256 env var.
+//   - If $EMERGENCY_JINJA_TEMPLATE_KEY is set (B2 mode per
+//     06-WAVE0-GATES.md Decision 1): fetch + sha256 verify Jinja.
+//     If empty (B1 fallback): skip Jinja download — llama-server
+//     falls back to image-embedded template.
+//
+// Pattern: 06-SPIKE-runtype-args.md Round 2 — entrypoint=/bin/bash +
+// args=["-c", <this-script + exec llama-server>]. PID 1 becomes
+// llama-server via `exec` replacement so Vast crash detection works
+// (Pitfall 3 RESEARCH.md:414).
+//
+// Length budget: ~750 chars head + ~250 chars exec line = ~1000 char
+// total, well under the 1500 char safety margin (Pitfall 4 / must_haves
+// truth #4; Vast hard limit 4048).
+const emergencyOnstartHead = `set -e
+mkdir -p /weights/qwen /app/templates
+if ! command -v mc >/dev/null 2>&1; then
+  apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null
+  curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+  chmod +x /usr/local/bin/mc
+fi
+mc alias set ifix "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null
+if [ ! -f /weights/qwen/model.gguf ]; then
+  mc cp "ifix/${MINIO_BUCKET}/${WEIGHTS_QWEN_KEY}" /weights/qwen/model.gguf
+fi
+echo "$WEIGHTS_QWEN_SHA256  /weights/qwen/model.gguf" | sha256sum -c -
+if [ -n "${EMERGENCY_JINJA_TEMPLATE_KEY:-}" ]; then
+  mc cp "ifix/${MINIO_BUCKET}/${EMERGENCY_JINJA_TEMPLATE_KEY}" /app/templates/qwen3.5-27b-tool-calling.jinja
+  echo "$EMERGENCY_JINJA_TEMPLATE_SHA256  /app/templates/qwen3.5-27b-tool-calling.jinja" | sha256sum -c -
+fi
+`
+
+// buildEmergencyOnstart concatenates the bash bootstrap head with the
+// trailing `exec /app/llama-server <args>` line. The exec replacement
+// is critical: it overlays PID 1 with llama-server so Vast.ai crash
+// detection observes the real process state (Pitfall 3). Args are NOT
+// shell-quoted because the slice members are controlled (either the
+// hard-coded default or operator-supplied via Cfg.EmergencyLlamaArgs
+// CSV) — no untrusted input crosses into bash.
+func buildEmergencyOnstart(llamaArgs []string) string {
+	return emergencyOnstartHead + "exec /app/llama-server " + strings.Join(llamaArgs, " ") + "\n"
+}
+
 // buildCreateRequest assembles the CreateRequest body for PUT /asks/{id}/.
-// The image tag comes from Cfg.EmergencyPodImageTag (default "v1.0").
-// The `Env` map encodes the Docker -p port mappings (Vast convention).
-// Onstart is a one-line bash sentinel — Plan 06 only verifies port
-// mapping discovery; the production onstart pulls weights from MinIO
-// (Phase 1 image already handles it).
+//
+// Phase 6 Strategy B Locked payload (CONTEXT.md D-01-B..D-08-B,
+// revised per 06-WAVE0-GATES.md Decision 4 supersession of D-07-B
+// verbatim args):
+//
+//   - Image: Cfg.EmergencyTemplateImage (default
+//     "ghcr.io/ggml-org/llama.cpp:server-cuda-b9128" — upstream
+//     llama.cpp build, NO custom GHCR overlay per D-08-B).
+//   - Runtype: "args" — preserves image ENTRYPOINT semantics;
+//     fixes STATE.md:85 bug ("ssh" silently overrode CMD,
+//     lifecycles 29-33 timed out).
+//   - Entrypoint: "/bin/bash" — REQUIRED override per
+//     06-SPIKE-runtype-args.md Round 2 (image ENTRYPOINT is
+//     llama-server direct; we need bash to run bootstrap script).
+//   - Args: []string{"-c", <onstart-script>} — Vast `--onstart-cmd`
+//     does NOT shell-wrap in args runtype (spike Round 1 fail);
+//     pass the script as the bash -c payload instead.
+//   - Onstart: "" — empty for the same reason; Vast onstart-cmd in
+//     args runtype is interpreted as exec+argv by runc.
+//   - Env: MinIO creds + Qwen + optional Jinja (B2). Whisper +
+//     BGE-M3 keys REMOVED — emergency pod is LLM-only per CONTEXT.md
+//     <deferred> line 171 / Phase 6.5 D-C2.
+//   - Disk: 40 GB (was 80) per 06-WAVE0-GATES.md Decision 1 — opens
+//     more spot-market hosts (RESEARCH OQ6). B2 template ~3GB +
+//     weights 16GB + tmp = ~22GB; 40GB has comfortable headroom.
 func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vast.CreateRequest {
+	cfg := r.deps.Cfg
+	llamaArgs := emergencyLlamaArgsDefault
+	if len(cfg.EmergencyLlamaArgs) > 0 {
+		llamaArgs = cfg.EmergencyLlamaArgs
+	}
+	onstart := buildEmergencyOnstart(llamaArgs)
+	env := map[string]string{
+		// Vast Docker port forwarding convention (keys are literal
+		// `-p HOST:CONTAINER` flag strings per spike capture). LLM-only
+		// pod exposes 8000; Whisper/embed/health-bridge ports omitted.
+		"-p 8000:8000":        "1",
+		"MINIO_ENDPOINT":      cfg.MinioEndpoint,
+		"MINIO_BUCKET":        cfg.MinioBucket,
+		"MINIO_ACCESS_KEY":    cfg.MinioAccessKey,
+		"MINIO_SECRET_KEY":    cfg.MinioSecretKey,
+		"WEIGHTS_QWEN_KEY":    cfg.WeightsQwenKey,
+		"WEIGHTS_QWEN_SHA256": cfg.WeightsQwenSHA256,
+		// WEIGHTS_WHISPER_* + WEIGHTS_BGE_M3_* INTENTIONALLY OMITTED
+		// (emergency pod is LLM-only per Phase 6.5 D-C2 + CONTEXT.md
+		// <deferred> line 171).
+	}
+	if cfg.EmergencyJinjaTemplateKey != "" {
+		// B2 mode (06-WAVE0-GATES.md Decision 1, production default).
+		// Onstart script's `if [[ -n "${EMERGENCY_JINJA_TEMPLATE_KEY:-}"
+		// ]]` block fetches + sha256-verifies the Jinja template from
+		// MinIO. Empty key = B1 fallback (image-embedded template).
+		env["EMERGENCY_JINJA_TEMPLATE_KEY"] = cfg.EmergencyJinjaTemplateKey
+		env["EMERGENCY_JINJA_TEMPLATE_SHA256"] = cfg.EmergencyJinjaTemplateSHA256
+	}
 	return vast.CreateRequest{
-		ClientID: "me",
-		Image:    "ghcr.io/ifixtelecom/ifix-ai-pod:" + r.deps.Cfg.EmergencyPodImageTag,
-		Env: map[string]string{
-			// Vast.ai Docker port forwarding convention (per spike capture):
-			// keys are literal `-p HOST_PORT:CONTAINER_PORT` flag strings.
-			// Emergency pods serve LLM-only (D-C2), so only 8000 is exposed;
-			// Whisper/embed/health-bridge ports from the Phase 1 multi-service
-			// stack are intentionally omitted.
-			"-p 8000:8000": "1",
-			// Only Qwen weights are needed for the LLM-only emergency pod.
-			// Whisper + BGE keys/hashes still forwarded so Phase 1 host-mode
-			// pod deployments (smoke.yml) keep working with the same image —
-			// emerg-bootstrap.sh ignores them; Phase 1 onstart.sh consumes
-			// them when present.
-			"MINIO_ENDPOINT":         r.deps.Cfg.MinioEndpoint,
-			"MINIO_BUCKET":           r.deps.Cfg.MinioBucket,
-			"MINIO_ACCESS_KEY":       r.deps.Cfg.MinioAccessKey,
-			"MINIO_SECRET_KEY":       r.deps.Cfg.MinioSecretKey,
-			"WEIGHTS_QWEN_KEY":       r.deps.Cfg.WeightsQwenKey,
-			"WEIGHTS_QWEN_SHA256":    r.deps.Cfg.WeightsQwenSHA256,
-			"WEIGHTS_WHISPER_KEY":    r.deps.Cfg.WeightsWhisperKey,
-			"WEIGHTS_WHISPER_SHA256": r.deps.Cfg.WeightsWhisperSHA256,
-			"WEIGHTS_BGE_M3_KEY":     r.deps.Cfg.WeightsBGEM3Key,
-			"WEIGHTS_BGE_M3_SHA256":  r.deps.Cfg.WeightsBGEM3SHA256,
-		},
-		// Emergency pods run the image's baked-in CMD (emerg-bootstrap.sh),
-		// which downloads qwen weights from MinIO then execs llama-server.
-		// No Onstart hook needed — Vast.ai's onstart runs on the VM host,
-		// not inside the container, and the host has no application code.
-		Onstart: "",
-		Runtype: "ssh",
-		// 22 GB image (Qwen weights pre-baked) + extraction overhead +
-		// llama-server runtime tmp; 50 GB was marginal during Phase 6 UAT
-		// (instance stuck at actual_status=loading with ports=None after
-		// pull complete). 80 GB leaves headroom and the spot-market filter
-		// still matches plenty of offers.
-		Disk:        80,
+		ClientID:    "me",
+		Image:       cfg.EmergencyTemplateImage,
+		Env:         env,
+		Onstart:     "",
+		Runtype:     "args",
+		Entrypoint:  "/bin/bash",
+		Args:        []string{"-c", onstart},
+		Disk:        40,
 		Label:       fmt.Sprintf("ifix-emerg-lifecycle-%d", lifecycleID),
 		TargetState: "running",
 	}
