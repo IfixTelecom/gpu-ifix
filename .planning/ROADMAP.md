@@ -198,11 +198,11 @@ Plans:
 **Goal:** Refactor primary pod to Strategy B Full-Stack pattern: upstream images + inline bash bootstrap + Vast.ai Runtype=args + schedule-based lifecycle. Eliminate custom GHCR `ifix-ai-pod` image dependency (gap left by Phase 6 PR2 deletes), drop health-bridge (D-05), keep DCGM exporter (D-07), add schedule env vars (D-08).
 **Requirements**: (refactor only — herda POD-01..07 via implementação diferente; tracked via D-01..D-10 decisions em 06.6-CONTEXT.md)
 **Depends on:** Phase 6
-**Plans:** 13 plans (reviews 2026-05-17: split 06 into 06a+06b per consensus action #1)
+**Plans:** 1/13 plans executed
 
 Plans:
 
-- [ ] 06.6-01-PLAN.md — Wave 0 spikes (DinD privileged + Qwen3.6 Jinja) + 4 image SHA pins + WAVE0-GATES.md operator lock doc
+- [x] 06.6-01-PLAN.md — Wave 0 spikes (DinD privileged + Qwen3.6 Jinja) + 4 image SHA pins + WAVE0-GATES.md operator lock doc
 - [ ] 06.6-02-PLAN.md — Extract vastutil shared helpers (FilterBelowCap, ExcludeHost, MustEventJSON, PgInt8, PgNumericFromFloat, CaptureBreadcrumb, BestEffortDestroy) from emerg/lifecycle.go
 - [ ] 06.6-03-PLAN.md — Add 24 Primary* config fields (incl PrimaryPodScheduleProvisionLeadSeconds per reviews #8 pre-warm offset + PrimaryProvisionFailureCooldownSeconds + SHA-pinned image defaults)
 - [ ] 06.6-04-PLAN.md — gateway/internal/primary/ scaffolding: onstart.go (shell hardening per reviews #7: set -euo without x, quoted env, required env guards) + lifecycle.go (buildCreateRequest + SHA fail-fast precondition gate per reviews #6) + 17+ unit tests
