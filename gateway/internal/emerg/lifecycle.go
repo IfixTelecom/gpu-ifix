@@ -697,13 +697,13 @@ mkdir -p /weights/qwen /app/templates /run/sshd /root/.ssh
 
 # Optional operator debug SSH (lifecycle 36 hang exposed need for realtime
 # inspection — args runtype disables vast-cli SSH injection, so we install
-# sshd inline when EMERGENCY_DEBUG_SSH_PUBLIC_KEY is set; production runs
+# sshd inline when POD_DEBUG_SSH_PUBLIC_KEY is set; production runs
 # leave the env empty for least-privilege).
-if [ -n "${EMERGENCY_DEBUG_SSH_PUBLIC_KEY:-}" ]; then
+if [ -n "${POD_DEBUG_SSH_PUBLIC_KEY:-}" ]; then
   if ! command -v sshd >/dev/null 2>&1; then
     apt-get update -qq && apt-get install -y -qq openssh-server >/dev/null
   fi
-  printf '%s\n' "$EMERGENCY_DEBUG_SSH_PUBLIC_KEY" > /root/.ssh/authorized_keys
+  printf '%s\n' "$POD_DEBUG_SSH_PUBLIC_KEY" > /root/.ssh/authorized_keys
   chmod 700 /root/.ssh
   chmod 600 /root/.ssh/authorized_keys
   # Ensure root login allowed
@@ -797,12 +797,12 @@ func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) vas
 		env["EMERGENCY_JINJA_TEMPLATE_KEY"] = cfg.EmergencyJinjaTemplateKey
 		env["EMERGENCY_JINJA_TEMPLATE_SHA256"] = cfg.EmergencyJinjaTemplateSHA256
 	}
-	if cfg.EmergencyDebugSSHPublicKey != "" {
+	if cfg.PodDebugSSHPublicKey != "" {
 		// Operator debug SSH (off by default; only when env set in
 		// Portainer/.env). Onstart installs sshd inline and Vast maps
 		// container port 22 to a random host port. Use vastai show
 		// instance to read the assigned ssh_host/ssh_port post-create.
-		env["EMERGENCY_DEBUG_SSH_PUBLIC_KEY"] = cfg.EmergencyDebugSSHPublicKey
+		env["POD_DEBUG_SSH_PUBLIC_KEY"] = cfg.PodDebugSSHPublicKey
 		env["-p 22:22"] = "1"
 	}
 	// Vast.ai API has NO `entrypoint` JSON field; vast-cli's `--entrypoint`
