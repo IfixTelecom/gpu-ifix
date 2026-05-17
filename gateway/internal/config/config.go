@@ -134,6 +134,7 @@ type Config struct {
 	EmergencyJinjaTemplateKey         string   // EMERGENCY_JINJA_TEMPLATE_KEY (MinIO object key; D-04-B option B2 LOCKED per 06-WAVE0-GATES.md Decision 2; default points at production qwen3.5-27b-tool-calling Jinja — empty would represent B1 image-overlay path, not selected)
 	EmergencyJinjaTemplateSHA256      string   // EMERGENCY_JINJA_TEMPLATE_SHA256 (hex sha256; D-04-B B2 LOCKED; default matches EmergencyJinjaTemplateKey; sha256 is public-grade integrity check, not secret — safe to log)
 	EmergencyLlamaArgs                []string // EMERGENCY_LLAMA_ARGS (CSV; D-07-B; empty → nil → lifecycle.go uses hardcoded const; override only if production needs different llama-server flags)
+	EmergencyDebugSSHPublicKey        string   // EMERGENCY_DEBUG_SSH_PUBLIC_KEY (optional; when non-empty, onstart installs+starts sshd inside the pod with this key in /root/.ssh/authorized_keys and Vast maps -p 22:22/tcp; intended for operator debug during UAT; leave empty in production for least-privilege)
 	MonthlyEmergencyBudgetBRL         float64  // MONTHLY_EMERGENCY_BUDGET_BRL (default 200.0; D-D2 — Sentry alert only, no auto-block)
 	PrimaryHostID                     int64    // PRIMARY_HOST_ID (default 0 = unknown; D-A2 host_id != filter only applied if known)
 	ProvisionColdStartBudgetSeconds   int      // PROVISION_COLDSTART_BUDGET_SECONDS (default 600; D-A4 — /health poll budget)
@@ -262,6 +263,7 @@ func Load() (Config, error) {
 		EmergencyJinjaTemplateKey:         envOr("EMERGENCY_JINJA_TEMPLATE_KEY", "emerg-onstart/templates/qwen3.5-27b-tool-calling-1067302cc6d927210a84775b9a060f724da15debc168c79710cbf763512e9f67.jinja"),
 		EmergencyJinjaTemplateSHA256:      envOr("EMERGENCY_JINJA_TEMPLATE_SHA256", "1067302cc6d927210a84775b9a060f724da15debc168c79710cbf763512e9f67"),
 		EmergencyLlamaArgs:                csvOr(os.Getenv("EMERGENCY_LLAMA_ARGS"), nil),
+		EmergencyDebugSSHPublicKey:        envOr("EMERGENCY_DEBUG_SSH_PUBLIC_KEY", ""),
 		MonthlyEmergencyBudgetBRL:         floatOr(os.Getenv("MONTHLY_EMERGENCY_BUDGET_BRL"), 200.0),
 		PrimaryHostID:                     int64(atoiOr(os.Getenv("PRIMARY_HOST_ID"), 0)),
 		ProvisionColdStartBudgetSeconds:   atoiOr(os.Getenv("PROVISION_COLDSTART_BUDGET_SECONDS"), 600),

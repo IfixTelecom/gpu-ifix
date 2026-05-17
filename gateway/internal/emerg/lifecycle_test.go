@@ -376,17 +376,19 @@ func TestBuildCreateRequest_LlamaArgsOverride(t *testing.T) {
 		"override REPLACES default flags entirely; default --jinja must not leak")
 }
 
-// TestEmergencyOnstart_Under1500Chars — Pitfall 4 RESEARCH.md:426
-// enforcement. Vast API hard limit is 4048 chars; plan must_haves
-// truth #4 sets 1500 char safety margin so growth (new env var or
-// extra sha256 check) does not unexpectedly cross the boundary.
-// If this fails, gzip+base64 the script before assembling Args.
-func TestEmergencyOnstart_Under1500Chars(t *testing.T) {
+// TestEmergencyOnstart_UnderVastLimit — Pitfall 4 RESEARCH.md:426
+// enforcement. Vast API hard limit is 4048 chars; we keep a 2500-char
+// budget so a future env var or sha256 check does not unexpectedly
+// cross the boundary. Bumped from 1500 → 2500 in lifecycle 36 follow-up
+// when the optional debug-SSH bootstrap added ~450 chars (still ~50%
+// margin below the Vast cap). If this fails, gzip+base64 the script
+// before assembling Args.
+func TestEmergencyOnstart_UnderVastLimit(t *testing.T) {
 	r := newReconcilerForBuildTest("emerg-onstart/templates/foo.jinja", "deadbeefSHA", nil)
 	req := r.buildCreateRequest(vast.Offer{ID: 1}, 1)
 	require.Len(t, req.Args, 2)
-	require.Less(t, len(req.Args[1]), 1500,
-		"onstart script must stay under 1500 chars (Vast 4048 limit, margin per plan must_haves truth #4); gzip+base64 if growth needed")
+	require.Less(t, len(req.Args[1]), 2500,
+		"onstart script must stay under 2500 chars (Vast 4048 limit, internal margin); gzip+base64 if growth needed")
 }
 
 // TestEmergencyOnstart_StartsWithSetE — script MUST begin with `set -e`
