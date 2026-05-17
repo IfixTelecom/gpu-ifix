@@ -44,7 +44,7 @@ func defaultTestCfg(t *testing.T) config.Config {
 	cfg.VastPriceCapDPH = 0.40
 	cfg.USDToBRLRate = 5.0
 	cfg.MonthlyEmergencyBudgetBRL = 200.0
-	cfg.EmergencyPodImageTag = "v1.0"
+	cfg.EmergencyTemplateImage = "ghcr.io/ggml-org/llama.cpp:server-cuda-b9128"
 	cfg.VastAPIQPSLimit = 1
 	return cfg
 }
