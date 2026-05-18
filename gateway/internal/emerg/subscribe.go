@@ -186,11 +186,47 @@ func (r *Reconciler) SubscribePrimaryEvents(ctx context.Context) {
 					// no active emerg lifecycle to force-destroy, OR the
 					// emerg path is already in the natural cutback /
 					// destroy sequence.
+					//
+					// Force-destroy sequence (matches handleForceDestroy
+					// in reconciler.go, which is the operator-initiated
+					// analog):
+					//   1. cancelActiveLifecycle — publishes Layer 2
+					//      `cancel_in_flight` event on gw:emerg:events for
+					//      cross-replica observers + cancels any lingering
+					//      provisioning ctx (idempotent no-op when the
+					//      goroutine already exited after markHealthy).
+					//   2. destroyAndCloseLifecycle — actually destroys
+					//      the Vast.ai instance + closes the lifecycle
+					//      row. cancelActiveLifecycle ALONE does NOT
+					//      destroy an EmergencyActive pod: Layer 3 is
+					//      gated on the provisioning goroutine's
+					//      ctx.Done() branch which has already exited.
+					//   3. enterCooldown — transitions FSM
+					//      EmergencyActive → Cooldown (normal cutback
+					//      suppression window applies; fromFailure=false).
 					if r.deps.FSM.State() == StateEmergencyActive {
+						lc := r.activeLifecycle.Load()
 						log.Info("primary_ready while emerg active; force-destroying emerg lifecycle (Pitfall #11)",
 							"primary_lifecycle_id", ev.LifecycleID,
 							"by_replica", ev.ReplicaID)
+						// Layer 1+2 — ctx cancel + Pub/Sub broadcast.
 						r.cancelActiveLifecycle(ctx, "primary_took_over")
+						// Layer 3 — actual Vast destroy + DB close. Guard
+						// against the lifecycle being nil (defensive: a
+						// concurrent close race would surface as lc==nil).
+						if lc != nil {
+							if err := r.destroyAndCloseLifecycle(ctx, lc, "primary_took_over"); err != nil {
+								log.Error("primary_took_over: destroyAndCloseLifecycle failed",
+									"lifecycle_id", lc.ID,
+									"err", err)
+							}
+						}
+						// FSM transition. fromFailure=false — Pitfall #11
+						// is a deliberate handoff, not a provisioning
+						// failure; the shorter ProvisionHealthyDurationSeconds
+						// suppression window applies.
+						r.enterCooldown(StateEmergencyActive, time.Now(),
+							"primary_took_over", false)
 					} else {
 						log.Debug("primary_ready observed; emerg not active",
 							"emerg_state", r.deps.FSM.State().String(),
