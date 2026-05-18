@@ -54,7 +54,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # so python3 resolves to python3.12 (both wheels support 3.10+).
 RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/speaches-venv/bin/pip install --no-cache-dir "speaches==0.9.0rc3" \
+    && /opt/speaches-venv/bin/pip install --no-cache-dir \
+         "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
     && python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77"
