@@ -56,9 +56,13 @@ RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
          "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
+    && /opt/speaches-venv/bin/pip install --no-cache-dir \
+         "onnx-asr<0.10.0" \
     && python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77"
+    && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
+    && /opt/infinity-venv/bin/pip install --no-cache-dir \
+         "optimum[bettertransformer]"
 
 # Copy dcgm-exporter from stage 1.
 COPY --from=dcgm-stage /usr/bin/dcgm-exporter /usr/bin/dcgm-exporter
