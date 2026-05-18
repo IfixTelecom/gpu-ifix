@@ -77,6 +77,15 @@ RUN mkdir -p /var/log /weights/qwen /weights/whisper /weights/bge-m3 /app/templa
 LABEL org.opencontainers.image.source="https://github.com/IfixTelecom/gpu-ifix"
 LABEL org.opencontainers.image.description="Phase 6.6 primary pod — supervisord + llama.cpp b9191 + speaches + infinity + dcgm"
 
+# Clear inherited ENTRYPOINT from llama.cpp base (which is `/app/llama-server`).
+# With Vast.ai `runtype=args` the gateway sends Onstart="/bin/bash" Args=["-c", "<onstart>"];
+# preserving the inherited ENTRYPOINT would cause the container to run
+# `/app/llama-server /bin/bash -c "<onstart>"` and exit immediately because
+# llama-server cannot parse those flags. UAT 2026-05-18 attempts 3-5 all
+# died this way (Vast `actual_status=exited` within 30s of image extract).
+ENTRYPOINT []
+CMD []
+
 # Entrypoint contract: Strategy B runtype=args (Vast.ai accepts /bin/bash
 # as onstart_cmd and Args=["-c", <script>] as the bash payload). The
 # gateway-side onstart script (gateway/internal/primary/onstart.go
