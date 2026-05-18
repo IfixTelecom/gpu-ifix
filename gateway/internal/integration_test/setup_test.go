@@ -177,6 +177,18 @@ func freshSchema(t *testing.T, ctx context.Context) (*pgxpool.Pool, *redis.Clien
 		"TRUNCATE ai_gateway.emergency_lifecycles RESTART IDENTITY CASCADE"); err != nil {
 		t.Fatalf("truncate emergency_lifecycles: %v", err)
 	}
+	// primary_lifecycles MUST also be truncated between cases (same rationale
+	// as emergency_lifecycles): the Postgres container is shared package-wide,
+	// rows written by one primary test would otherwise leak into the next,
+	// breaking absolute-count asserts AND aborting subsequent
+	// InsertPrimaryLifecycle calls via the `primary_live_singleton` partial
+	// unique index (which only allows one row with ended_at IS NULL).
+	// RESTART IDENTITY zeroes the BIGSERIAL id sequence so ids stay
+	// deterministic per test.
+	if _, err := pool.Exec(ctx,
+		"TRUNCATE ai_gateway.primary_lifecycles RESTART IDENTITY CASCADE"); err != nil {
+		t.Fatalf("truncate primary_lifecycles: %v", err)
+	}
 	// Re-seed the default converseai tenant that the 0001 migration created.
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO ai_gateway.tenants (slug,name) VALUES ('converseai','ConverseAI') ON CONFLICT (slug) DO NOTHING`); err != nil {
