@@ -8,10 +8,61 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
+
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
+	gen "github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/emerg/vast"
-	"github.com/ifixtelecom/gpu-ifix/gateway/internal/vastutil"
 )
+
+// VastAPI is the subset of vast.Client methods the primary reconciler
+// calls. Mirrors emerg.VastAPI shape — same DTOs, same Vast.ai endpoint
+// surface — but declared in this package so primary does not import
+// emerg (would create a cycle once Plan 06.6-08 wires the gateway main).
+// Production wires *vast.Client; unit tests inject a fake.
+type VastAPI interface {
+	SearchOffers(ctx context.Context, filter vast.SearchFilter) ([]vast.Offer, error)
+	CreateInstance(ctx context.Context, offerID int64, req vast.CreateRequest) (vast.Instance, error)
+	GetInstance(ctx context.Context, instanceID int64) (vast.Instance, error)
+	DestroyInstance(ctx context.Context, instanceID int64) error
+}
+
+// LoaderAdapter is the surface the primary reconciler consumes from the
+// upstreams.Loader. Plan 06.6-06b's job is to satisfy this interface on
+// the real *upstreams.Loader (extending OverrideTier0/RestoreTier0 to
+// handle the 3 primary roles: "llm", "stt", "embed").
+//
+// The OverrideTier0 / RestoreTier0 signatures are deliberately void
+// (no error return) to match the existing upstreams.Loader.OverrideTier0
+// + RestoreTier0 contract — the real implementation never fails; misroute
+// is logged at warn level inside the Loader. Refresh keeps its error
+// return because reloading enabled-upstreams from Postgres can legitimately
+// fail (DB connectivity loss).
+type LoaderAdapter interface {
+	OverrideTier0(role, url string)
+	RestoreTier0(role string)
+	Refresh(ctx context.Context) error
+}
+
+// DCGMScraperAdapter is the minimal surface the primary reconciler needs
+// from the DCGM Prometheus scraper. Plan 06.6-06b's job is to add SetURL
+// to the real dcgm.Scraper so the reconciler can point the scraper at the
+// new primary pod's :9400/metrics endpoint when StateReady fires AND
+// blank it when the lifecycle closes (StateDestroying → StateAsleep).
+type DCGMScraperAdapter interface {
+	SetURL(url string)
+}
+
+// InflightAdapter is the minimal surface the primary reconciler needs
+// from the shed.InflightRegistry. Plan 06.6-06b's job is to add Count on
+// the real *shed.InflightRegistry (wrapping the existing GlobalInflight)
+// so the reconciler can sum local-llm + local-stt + local-embed inflight
+// during evaluateDraining (drain-complete gate: inflight==0 OR grace
+// elapsed → transition Draining→Destroying).
+type InflightAdapter interface {
+	Count(upstream string) int64
+}
 
 // Sentinel errors used by buildCreateRequest to fail fast when the
 // operator left a critical weight SHA256 unset. Reviews consensus action
@@ -46,40 +97,153 @@ type primaryPodURLs struct {
 	DCGM  string
 }
 
-// Deps is the minimal viable wiring for the primary Reconciler at the
-// end of Plan 06.6-04. Plan 06.6-06a extends it with FSM, DB queries,
-// Redis lock, Inflight counter, schedule.Rule, upstream Loader, and
-// dcgm.Scraper. Kept narrow here so this plan compiles standalone and
-// the downstream plans can grow the struct organically without breaking
-// Plan 06.6-04 tests.
+// Deps is the full wiring for the primary Reconciler after Plan 06.6-06a.
+// Plan 06.6-04 shipped a 4-field minimal Deps (Cfg/Log/Vast/HealthCheck);
+// this plan extends it with FSM, DB queries, Redis lock, Inflight counter,
+// schedule.Rule, upstream Loader, DCGM scraper, and replica identifier.
+//
+// All fields except TickInterval / ReplicaID have no defaults — wire them
+// at construction time in Plan 06.6-08 main.go. Unit tests fill only the
+// fields the code paths under test exercise.
 type Deps struct {
-	Cfg         config.Config
-	Log         *slog.Logger
-	Vast        vastutil.VastDestroyer
+	// Cfg holds Phase 6.6 primary-pod knobs (PrimaryPodSchedule* +
+	// PrimaryProvision* + MinIO creds + image SHAs).
+	Cfg config.Config
+
+	// Log is the structured logger. nil defaults to slog.Default(); the
+	// reconciler attaches `subsystem=primary.reconciler` + the replica ID
+	// at Start.
+	Log *slog.Logger
+
+	// Vast is the Vast.ai REST client. Implements VastAPI subset; tests
+	// inject a fake to avoid live HTTP calls.
+	Vast VastAPI
+
+	// HealthCheck is the per-endpoint /health probe. Returns true when the
+	// URL responds 2xx within an internal timeout. Tests override with a
+	// scriptable bool-returning closure (so the 4-endpoint health gate in
+	// evaluateProvisioning can be exercised deterministically).
 	HealthCheck func(ctx context.Context, url string) bool
+
+	// Loader is the upstream loader (3-role tier-0 override target). Plan
+	// 06.6-06b satisfies LoaderAdapter on the real *upstreams.Loader.
+	Loader LoaderAdapter
+
+	// DCGMScraper points the GPU-metrics scraper at the new primary pod's
+	// :9400/metrics endpoint when StateReady fires (and clears it on
+	// closeLifecycle). Plan 06.6-06b adds SetURL to the real dcgm.Scraper.
+	DCGMScraper DCGMScraperAdapter
+
+	// Inflight reports the per-upstream in-flight request count consumed by
+	// evaluateDraining (drain-complete gate). Plan 06.6-06b adds Count to
+	// the real *shed.InflightRegistry.
+	Inflight InflightAdapter
+
+	// FSM is the in-process 5-state primary FSM (Plan 06.6-05). MUST be
+	// non-nil — State() / Transition / SetState drive the dispatcher.
+	FSM *FSM
+
+	// Rule is the immutable schedule rule (Plan 06.6-05). ShouldBeProvisioned
+	// gates evaluateAsleep; IsInPeak gates evaluateReady drain trigger.
+	Rule ScheduleRule
+
+	// DB is the Postgres pool used for sqlc-generated query bindings:
+	// InsertPrimaryLifecycle / UpdatePrimaryLifecycleVastIDs /
+	// MarkPrimaryLifecycleHealthy / MarkPrimaryLifecycleDraining /
+	// ClosePrimaryLifecycle / GetOpenPrimaryLifecycle.
+	DB *pgxpool.Pool
+
+	// Redis is the go-redis v9 client used for redsync leader election
+	// (gw:primary:lock) + Pub/Sub (gw:primary:events) for the event
+	// subscriber + state mirror writes (gw:primary:state Hash).
+	Redis *redis.Client
+
+	// ReplicaID identifies this gateway replica. Defaults to os.Hostname()
+	// in NewReconcilerFull when empty. Tagged on every PublishPrimaryEvent
+	// so cross-replica observers can attribute publishes.
+	ReplicaID string
 }
 
 // Reconciler drives the primary pod's 5-state FSM (Asleep | Provisioning
-// | Ready | Draining | Destroying). Plan 06.6-04 only declares the struct
-// + constructor + buildCreateRequest; Plan 06.6-06a extends it with
-// startProvisioning / waitForReadyOrDestroy / markReady / closeLifecycle
-// flows mirroring the emerg package shape.
+// | Ready | Draining | Destroying). The struct is constructed at gateway
+// boot (Plan 06.6-08 main.go wiring) and started via Start(ctx); the
+// reconciler holds gw:primary:lock as leader and dispatches FSM
+// transitions at 1Hz.
 type Reconciler struct {
-	deps           Deps
-	cfg            config.Config
-	activePodURLs  atomic.Pointer[primaryPodURLs]
-	rule           ScheduleRule
+	deps Deps
+	cfg  config.Config
+	rule ScheduleRule
+
+	// activePodURLs is the per-service URL snapshot of the running primary
+	// pod (set by markReady, cleared by closeLifecycle). Lockless read via
+	// ActivePodURLs() — safe for cross-goroutine hot-path consumers.
+	activePodURLs atomic.Pointer[primaryPodURLs]
+
+	// activeInstanceID is the Vast.ai instance ID of the running primary
+	// pod (0 when none). Used by evaluateDestroying to call
+	// vastutil.BestEffortDestroy + by cancelActiveLifecycle.
+	activeInstanceID atomic.Int64
+
+	// activeLifecycleID is the primary_lifecycles row ID of the currently
+	// in-flight lifecycle (0 when none). Set by startProvisioning right
+	// after InsertPrimaryLifecycle returns; consulted by markReady /
+	// closeLifecycle / recoverOpenLifecycle.
+	activeLifecycleID atomic.Int64
+
+	// drainStartedAt captures the wall-clock time at which evaluateReady
+	// transitioned Ready→Draining. evaluateDraining uses it to decide
+	// "grace elapsed?" (now.Sub(*drainStartedAt) >= GraceRampDownS).
 	drainStartedAt atomic.Pointer[time.Time]
+
+	// lastProvisionFailureAt is the wall-clock time of the most recent
+	// provisioning failure (cold-start timeout, vast_create_error,
+	// vast_status_msg_error per reviews #11, offer_race_lost). The
+	// evaluateAsleep cooldown gate refuses to re-provision until
+	// PrimaryProvisionFailureCooldownSeconds has elapsed since this
+	// timestamp — the T-06.6-04 schedule-oscillation mitigation.
+	lastProvisionFailureAt atomic.Pointer[time.Time]
+
+	// isLeader is true iff this replica currently holds gw:primary:lock.
+	// Set by runScheduleLoop's redsync LockContext path; consulted by the
+	// event subscriber so non-leaders observe events without acting on them
+	// (PRV-03 single-leader invariant parity with emerg).
+	isLeader atomic.Bool
+
+	// lifecycleCancel holds the context-cancel func for the in-flight
+	// provisioning goroutine. Plan 06.6-06a startProvisioning stores it;
+	// cancelActiveLifecycle swaps to nil + invokes it on operator force-
+	// down or schedule wrap-up while mid-provisioning.
+	lifecycleCancel atomic.Pointer[context.CancelFunc]
+
+	// queriesOverride is the test-only injection slot for the sqlc query
+	// handle. Production leaves this nil — the queries() helper builds a
+	// *gen.Queries from Deps.DB on demand. Tests inject a fake DBTX-backed
+	// *gen.Queries via SetQueriesForTest so the reconciler can exercise
+	// the SQL paths without standing up a real *pgxpool.Pool.
+	queriesOverride atomic.Pointer[gen.Queries]
 }
 
 // NewReconciler constructs a Reconciler with the given Deps. cfg is
 // copied from Deps.Cfg into a top-level field so subsequent methods can
 // read the operator config without dereferencing Deps each call.
+//
+// Defaults applied here keep Plan 06.6-04 test fixtures (which pass only
+// Cfg+Log) working: nil Log → slog.Default(); empty ReplicaID is left
+// untouched (the caller in Plan 06.6-08 main.go will populate via
+// os.Hostname()). Rule is populated from the cfg via ParseScheduleEnv at
+// construction time when not pre-built — but failures bubble up to the
+// caller (Plan 06.6-08 is responsible for catching the fail-fast Pitfall
+// #4 timezone error at gateway boot).
 func NewReconciler(deps Deps) *Reconciler {
-	return &Reconciler{
+	if deps.Log == nil {
+		deps.Log = slog.Default()
+	}
+	r := &Reconciler{
 		deps: deps,
 		cfg:  deps.Cfg,
+		rule: deps.Rule,
 	}
+	return r
 }
 
 // ActivePodURLs returns the currently active primary pod URLs (one per
@@ -208,32 +372,69 @@ func (r *Reconciler) buildCreateRequest(offer vast.Offer, lifecycleID int64) (va
 	}, nil
 }
 
+// podPortURL extracts a public service URL from a Vast.ai instance for the
+// given container port + readiness path suffix. Mirrors the emerg
+// `podHealthURL` shape: returns "" when inst is not yet ready (no IP, no
+// port mapping) — the caller treats empty as "keep polling" (W6 fix
+// parity).
+//
+// Wave 0 LOCKED supervisord 4-services model: container ports 8000 (LLM,
+// llama-server /v1/models), 8001 (STT, speaches /health), 8002 (embed,
+// infinity /health), 9400 (DCGM exporter /metrics). All 4 land inside ONE
+// container's network namespace — children of supervisord PID 1. The
+// reconciler does not know about supervisord (orchestration opaque); it
+// only polls 4 HTTP endpoints on Vast-exposed host ports.
+func (r *Reconciler) podPortURL(inst vast.Instance, containerPort, pathSuffix string) string {
+	if inst.PublicIPAddr == "" {
+		return ""
+	}
+	bindings, ok := inst.Ports[containerPort+"/tcp"]
+	if !ok || len(bindings) == 0 {
+		return ""
+	}
+	hostPort := bindings[0].HostPort
+	if hostPort == "" {
+		return ""
+	}
+	return "http://" + inst.PublicIPAddr + ":" + hostPort + pathSuffix
+}
+
 // podLLMURL extracts the public LLM endpoint (8000/tcp -> /v1/models) from
-// a running Vast.ai instance. Stub returning "" in this plan; Plan
-// 06.6-06a fills in the full host-port-mapping extraction (mirrors the
-// emerg podHealthURL pattern at lifecycle.go:564-577).
+// a running Vast.ai instance. Returns "" when the instance is not yet
+// ready to serve traffic (caller treats as "keep polling").
 func (r *Reconciler) podLLMURL(inst vast.Instance) string {
-	_ = inst
-	return ""
+	return r.podPortURL(inst, "8000", "/v1/models")
 }
 
 // podSTTURL extracts the public STT endpoint (8001/tcp -> /health) from a
-// running Vast.ai instance. Stub — Plan 06.6-06a fills in.
+// running Vast.ai instance.
 func (r *Reconciler) podSTTURL(inst vast.Instance) string {
-	_ = inst
-	return ""
+	return r.podPortURL(inst, "8001", "/health")
 }
 
 // podEmbedURL extracts the public embed endpoint (8002/tcp -> /health) from
-// a running Vast.ai instance. Stub — Plan 06.6-06a fills in.
+// a running Vast.ai instance.
 func (r *Reconciler) podEmbedURL(inst vast.Instance) string {
-	_ = inst
-	return ""
+	return r.podPortURL(inst, "8002", "/health")
 }
 
 // podDCGMURL extracts the public DCGM endpoint (9400/tcp -> /metrics) from
-// a running Vast.ai instance. Stub — Plan 06.6-06a fills in.
+// a running Vast.ai instance.
 func (r *Reconciler) podDCGMURL(inst vast.Instance) string {
-	_ = inst
-	return ""
+	return r.podPortURL(inst, "9400", "/metrics")
+}
+
+// stripPrimaryReadinessSuffix removes the readiness-probe suffix from a
+// pod URL so the upstream loader's tier-0 override receives the BASE URL
+// (parity with emerg.stripHealthSuffix). For LLM 8000 the suffix is
+// "/v1/models"; for STT 8001 and embed 8002 it is "/health". DCGM 9400
+// uses "/metrics" which the scraper expects in full — DCGM URLs are NOT
+// stripped (handled by callers directly).
+func stripPrimaryReadinessSuffix(u string) string {
+	for _, suffix := range []string{"/v1/models", "/health"} {
+		if len(u) > len(suffix) && u[len(u)-len(suffix):] == suffix {
+			return u[:len(u)-len(suffix)]
+		}
+	}
+	return u
 }

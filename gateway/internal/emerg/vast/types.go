@@ -88,6 +88,17 @@ type Instance struct {
 	ImageUUID      string                   `json:"image_uuid"`
 	Label          string                   `json:"label"`
 	Ports          map[string][]PortBinding `json:"ports"`
+	// StatusMsg surfaces operator-actionable Vast.ai status messages — most
+	// often empty during normal lifecycles, but populated with strings like
+	// "Error: Container failed to start" or "GPU error" when the host
+	// rejects the create / boot fails. Phase 6.6 Plan 06.6-06a reads it
+	// inside evaluateProvisioning's poll loop per reviews suggestion #11
+	// (06.6-REVIEWS.md): if non-empty AND case-insensitive-contains "error",
+	// the reconciler aborts provisioning, closes the lifecycle with a
+	// forensic reason `vast_status_msg_error:<msg>`, and enters the cooldown
+	// gate so the next tick does not immediately re-bid. Carries the
+	// lifecycle-29 forensics fix from STATE.md.
+	StatusMsg string `json:"status_msg"`
 }
 
 // IsActive returns true when the instance is in a non-terminal state. Used
