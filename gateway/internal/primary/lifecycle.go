@@ -115,7 +115,7 @@ func (r *Reconciler) ActivePodURLs() *primaryPodURLs {
 //   - Disk request 50 GB (WAVE0-GATES Decision 4 host filter is 40 GB;
 //     the pod asks for fifty gigabytes to leave ~11 GB headroom above
 //     ~29 GB total payload of Qwen GGUF 16 GB + image overhead ~3 GB
-//     + Whisper ~3 GB + BGE-M3 ~2 GB + workspace ~5 GB).
+//   - Whisper ~3 GB + BGE-M3 ~2 GB + workspace ~5 GB).
 //   - Label: "ifix-primary-lifecycle-<id>" (distinct from emerg's
 //     "ifix-emerg-lifecycle-<id>" for forensic separation).
 //
