@@ -77,13 +77,15 @@ RUN mkdir -p /var/log /weights/qwen /weights/whisper /weights/bge-m3 /app/templa
 LABEL org.opencontainers.image.source="https://github.com/IfixTelecom/gpu-ifix"
 LABEL org.opencontainers.image.description="Phase 6.6 primary pod — supervisord + llama.cpp b9191 + speaches + infinity + dcgm"
 
-# Clear inherited ENTRYPOINT from llama.cpp base (which is `/app/llama-server`).
-# With Vast.ai `runtype=args` the gateway sends Onstart="/bin/bash" Args=["-c", "<onstart>"];
-# preserving the inherited ENTRYPOINT would cause the container to run
-# `/app/llama-server /bin/bash -c "<onstart>"` and exit immediately because
-# llama-server cannot parse those flags. UAT 2026-05-18 attempts 3-5 all
-# died this way (Vast `actual_status=exited` within 30s of image extract).
-ENTRYPOINT []
+# Override inherited ENTRYPOINT from llama.cpp base (which is `/app/llama-server`)
+# with `/bin/bash` so the supervisord-driven primary pod boots via the bash
+# bootstrap script the gateway sends as Args=["-c", "<onstart>"]. Without
+# this override the container exits immediately because llama-server cannot
+# parse `/bin/bash -c <script>` as flags (UAT 2026-05-18 attempts 3-7).
+# An empty `ENTRYPOINT []` does NOT work on Vast.ai's runtype=args because
+# Vast appends Args directly without injecting Onstart as a separate executable
+# (attempt 6 also failed with empty entrypoint).
+ENTRYPOINT ["/bin/bash"]
 CMD []
 
 # Entrypoint contract: Strategy B runtype=args (Vast.ai accepts /bin/bash
