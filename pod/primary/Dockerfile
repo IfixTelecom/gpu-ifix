@@ -74,6 +74,15 @@ COPY pod/primary/supervisord.conf /etc/supervisor/conf.d/services.conf
 # empty per WAVE0-GATES Decision 3 B1 embedded).
 RUN mkdir -p /var/log /weights/qwen /weights/whisper /weights/bge-m3 /app/templates
 
+# Disable inherited HEALTHCHECK from llama.cpp base (which curls :8080/health,
+# but our supervisord-managed services bind to :8000/:8001/:8002/:9400 — never
+# :8080). Continuous healthcheck failure caused Vast.ai's worker agent to reap
+# the container as exited within 30-60s of start across all 8 UAT attempts on
+# 2026-05-18 (gsd-debug session primary-uat-custom-image-vast-runtype-args).
+# The gateway reconciler does the real 4-endpoint health-poll via Vast-exposed
+# host ports (gateway/internal/primary/reconciler.go evaluateProvisioning).
+HEALTHCHECK NONE
+
 LABEL org.opencontainers.image.source="https://github.com/IfixTelecom/gpu-ifix"
 LABEL org.opencontainers.image.description="Phase 6.6 primary pod — supervisord + llama.cpp b9191 + speaches + infinity + dcgm"
 
