@@ -956,11 +956,24 @@ func (r *Reconciler) recoverOpenLifecycle(ctx context.Context) error {
 // queries returns the sqlc-generated query handle bound to the deps' DB
 // pool. Returns nil when the pool is not wired (test fixture path) so
 // callers can short-circuit without panic.
+//
+// Tests inject a fake DBTX via SetQueriesForTest to avoid needing a real
+// *pgxpool.Pool — see reconciler_test.go fakeDBTX.
 func (r *Reconciler) queries() *gen.Queries {
+	if override := r.queriesOverride.Load(); override != nil {
+		return override
+	}
 	if r.deps.DB == nil {
 		return nil
 	}
 	return gen.New(r.deps.DB)
+}
+
+// SetQueriesForTest is the test-only injection point for the sqlc query
+// handle. Production wires Deps.DB; tests build a fake DBTX → *gen.Queries
+// and stash it here. Nil clears the override (production path resumes).
+func (r *Reconciler) SetQueriesForTest(q *gen.Queries) {
+	r.queriesOverride.Store(q)
 }
 
 // publishPrimaryEvent wraps redisx.PublishPrimaryEvent with the standard

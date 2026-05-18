@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/config"
+	gen "github.com/ifixtelecom/gpu-ifix/gateway/internal/db/gen"
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/emerg/vast"
 )
 
@@ -213,6 +214,13 @@ type Reconciler struct {
 	// cancelActiveLifecycle swaps to nil + invokes it on operator force-
 	// down or schedule wrap-up while mid-provisioning.
 	lifecycleCancel atomic.Pointer[context.CancelFunc]
+
+	// queriesOverride is the test-only injection slot for the sqlc query
+	// handle. Production leaves this nil — the queries() helper builds a
+	// *gen.Queries from Deps.DB on demand. Tests inject a fake DBTX-backed
+	// *gen.Queries via SetQueriesForTest so the reconciler can exercise
+	// the SQL paths without standing up a real *pgxpool.Pool.
+	queriesOverride atomic.Pointer[gen.Queries]
 }
 
 // NewReconciler constructs a Reconciler with the given Deps. cfg is
