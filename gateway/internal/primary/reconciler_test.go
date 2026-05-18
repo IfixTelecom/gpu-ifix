@@ -405,9 +405,19 @@ func TestEvaluateAsleep_TransitionsToProvisioningInPeak(t *testing.T) {
 			return insertReturningRow{id: 7, startedAt: time.Now()}
 		},
 	}
+	// Block SearchOffers so the spawnProvisioning goroutine CANNOT reach
+	// the error branch + FSM.SetState(Asleep) before this test asserts.
+	// Mirror seam in TestStart_LaunchesEventSubscriberAndForceUpWorks.
+	stopBlock := make(chan struct{})
+	t.Cleanup(func() { close(stopBlock) })
 	r := buildReconciler(t, Deps{
-		Cfg:  cfg,
-		Vast: &fakeVast{},
+		Cfg: cfg,
+		Vast: &fakeVast{
+			searchOffersFn: func(_ context.Context, _ vast.SearchFilter) ([]vast.Offer, error) {
+				<-stopBlock
+				return nil, errors.New("test teardown")
+			},
+		},
 		FSM:  fsm,
 		Rule: alwaysInPeakRule(),
 	})
@@ -474,9 +484,16 @@ func TestEvaluateAsleep_AdvancesAfterCooldownElapses(t *testing.T) {
 			return insertReturningRow{id: 42, startedAt: time.Now()}
 		},
 	}
+	stopBlock := make(chan struct{})
+	t.Cleanup(func() { close(stopBlock) })
 	r := buildReconciler(t, Deps{
-		Cfg:  cfg,
-		Vast: &fakeVast{},
+		Cfg: cfg,
+		Vast: &fakeVast{
+			searchOffersFn: func(_ context.Context, _ vast.SearchFilter) ([]vast.Offer, error) {
+				<-stopBlock
+				return nil, errors.New("test teardown")
+			},
+		},
 		FSM:  fsm,
 		Rule: alwaysInPeakRule(),
 	})
