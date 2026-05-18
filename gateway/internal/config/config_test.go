@@ -789,3 +789,415 @@ func TestLoad_Phase7NotRequired(t *testing.T) {
 		}
 	}
 }
+
+// phase6_6OptionalEnv enumerates the 24 Phase 6.6 primary-pod env vars
+// introduced in Plan 06.6-03. Cleared in setUp so a stray Portainer value
+// does not leak into the default-value assertions.
+//
+// Wave 0 operator-locked decisions (06.6-WAVE0-GATES.md):
+//   - Decision 1: 4 image SHA pins (template/speaches/infinity/dcgm)
+//   - Decision 3: B1 GGUF-embedded Jinja LOCKED (key+sha256 empty defaults)
+//   - Decision 5: PrimaryPodScheduleDisabled default true (soak gate)
+//   - Decision 6: ColdStartBudget default 2400 (40min generous margin)
+var phase6_6OptionalEnv = []string{
+	"PRIMARY_TEMPLATE_IMAGE",
+	"PRIMARY_SPEACHES_IMAGE",
+	"PRIMARY_INFINITY_IMAGE",
+	"PRIMARY_DCGM_IMAGE",
+	"PRIMARY_QWEN_WEIGHTS_KEY",
+	"PRIMARY_QWEN_WEIGHTS_SHA256",
+	"PRIMARY_QWEN_JINJA_KEY",
+	"PRIMARY_QWEN_JINJA_SHA256",
+	"PRIMARY_LLAMA_ARGS",
+	"PRIMARY_WHISPER_WEIGHTS_KEY",
+	"PRIMARY_WHISPER_WEIGHTS_SHA256",
+	"PRIMARY_BGEM3_WEIGHTS_KEY",
+	"PRIMARY_BGEM3_WEIGHTS_SHA256",
+	"PRIMARY_VAST_PRICE_CAP_DPH",
+	"PRIMARY_PROVISION_COLDSTART_BUDGET_SECONDS",
+	"PRIMARY_PROVISION_FAILURE_COOLDOWN_SECONDS",
+	"MONTHLY_PRIMARY_BUDGET_BRL",
+	"PRIMARY_POD_SCHEDULE_TIMEZONE",
+	"PRIMARY_POD_SCHEDULE_UP_HOUR",
+	"PRIMARY_POD_SCHEDULE_DOWN_HOUR",
+	"PRIMARY_POD_SCHEDULE_DAYS",
+	"PRIMARY_POD_SCHEDULE_GRACE_RAMP_DOWN_SECONDS",
+	"PRIMARY_POD_SCHEDULE_DISABLED",
+	"PRIMARY_POD_SCHEDULE_PROVISION_LEAD_SECONDS",
+}
+
+func clearPhase6_6(t *testing.T) {
+	t.Helper()
+	for _, v := range phase6_6OptionalEnv {
+		t.Setenv(v, "")
+	}
+}
+
+// TestConfig_PrimaryPod_DefaultsLoaded validates that with no Phase 6.6 env
+// vars set, Load returns the documented Wave 0 LOCKED defaults from
+// 06.6-WAVE0-GATES.md Decisions 1, 3, 5, 6 + Reviews 2026-05-17 #6 #8.
+func TestConfig_PrimaryPod_DefaultsLoaded(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+
+	// Schedule defaults (D-08.1).
+	if cfg.PrimaryPodScheduleTimezone != "America/Sao_Paulo" {
+		t.Errorf("PrimaryPodScheduleTimezone = %q, want America/Sao_Paulo (D-08.1)", cfg.PrimaryPodScheduleTimezone)
+	}
+	if cfg.PrimaryPodScheduleUpHour != 8 {
+		t.Errorf("PrimaryPodScheduleUpHour = %d, want 8 (D-08.1)", cfg.PrimaryPodScheduleUpHour)
+	}
+	if cfg.PrimaryPodScheduleDownHour != 22 {
+		t.Errorf("PrimaryPodScheduleDownHour = %d, want 22 (D-08.1)", cfg.PrimaryPodScheduleDownHour)
+	}
+	wantDays := []string{"mon", "tue", "wed", "thu", "fri"}
+	if got := cfg.PrimaryPodScheduleDays; len(got) != 5 ||
+		got[0] != wantDays[0] || got[1] != wantDays[1] || got[2] != wantDays[2] ||
+		got[3] != wantDays[3] || got[4] != wantDays[4] {
+		t.Errorf("PrimaryPodScheduleDays = %v, want %v (D-08.1)", got, wantDays)
+	}
+	if cfg.PrimaryPodScheduleGraceRampDownSeconds != 300 {
+		t.Errorf("PrimaryPodScheduleGraceRampDownSeconds = %d, want 300 (D-08.1)", cfg.PrimaryPodScheduleGraceRampDownSeconds)
+	}
+	// WAVE0-GATES Decision 5: soak gate enforced at config layer.
+	if !cfg.PrimaryPodScheduleDisabled {
+		t.Errorf("PrimaryPodScheduleDisabled default = false, want true (WAVE0-GATES Decision 5 soak gate)")
+	}
+	// Reviews consensus action #8: pre-warm offset.
+	if cfg.PrimaryPodScheduleProvisionLeadSeconds != 1800 {
+		t.Errorf("PrimaryPodScheduleProvisionLeadSeconds = %d, want 1800 (reviews #8 pre-warm offset)", cfg.PrimaryPodScheduleProvisionLeadSeconds)
+	}
+
+	// Image defaults (WAVE0-GATES Decision 1) — full SHA-pinned literals.
+	if !strings.Contains(cfg.PrimaryTemplateImage, "server-cuda-b9191") {
+		t.Errorf("PrimaryTemplateImage missing b9191 tag: %q", cfg.PrimaryTemplateImage)
+	}
+	if !strings.Contains(cfg.PrimaryTemplateImage, "@sha256:cb375311f4170bb1aa18840e946f64f99e6094b90bde69dcb6e0a62a183d7ba3") {
+		t.Errorf("PrimaryTemplateImage missing locked sha256 cb37...: %q", cfg.PrimaryTemplateImage)
+	}
+
+	// Cold-start budget (WAVE0-GATES Decision 6).
+	if cfg.PrimaryProvisionColdStartBudgetSeconds != 2400 {
+		t.Errorf("PrimaryProvisionColdStartBudgetSeconds = %d, want 2400 (WAVE0-GATES Decision 6 40min budget)", cfg.PrimaryProvisionColdStartBudgetSeconds)
+	}
+
+	// FAIL-FAST policy per reviews consensus action #6 — Whisper/BGE SHA
+	// have NO envOr default; empty passthrough so Plan 06.6-04
+	// buildPrimaryCreateRequest rejects at build time.
+	if cfg.PrimaryWhisperWeightsSHA256 != "" {
+		t.Errorf("PrimaryWhisperWeightsSHA256 default = %q, want empty (reviews #6 fail-fast policy)", cfg.PrimaryWhisperWeightsSHA256)
+	}
+	if cfg.PrimaryBGEM3WeightsSHA256 != "" {
+		t.Errorf("PrimaryBGEM3WeightsSHA256 default = %q, want empty (reviews #6 fail-fast policy)", cfg.PrimaryBGEM3WeightsSHA256)
+	}
+
+	// WAVE0-GATES Decision 3 — B1 GGUF-embedded Jinja LOCKED.
+	if cfg.PrimaryQwenJinjaKey != "" {
+		t.Errorf("PrimaryQwenJinjaKey default = %q, want empty (WAVE0-GATES Decision 3 B1 embedded)", cfg.PrimaryQwenJinjaKey)
+	}
+	if cfg.PrimaryQwenJinjaSHA256 != "" {
+		t.Errorf("PrimaryQwenJinjaSHA256 default = %q, want empty (WAVE0-GATES Decision 3 B1 embedded)", cfg.PrimaryQwenJinjaSHA256)
+	}
+
+	// Other defaults from CONTEXT.md D-04 + RESEARCH Decisions Resolved #5.
+	if cfg.PrimaryQwenWeightsKey != "qwen3.6-27b-Q4_K_M/v1.0.0/model.gguf" {
+		t.Errorf("PrimaryQwenWeightsKey = %q, want qwen3.6-27b-Q4_K_M/v1.0.0/model.gguf", cfg.PrimaryQwenWeightsKey)
+	}
+	if cfg.PrimaryQwenWeightsSHA256 != "a7cbd3ecc0e3f9b333edee61ae66bc87ed713c5d49587a8355814722ed329e0f" {
+		t.Errorf("PrimaryQwenWeightsSHA256 = %q, want a7cbd3ec... (Wave 0 verified)", cfg.PrimaryQwenWeightsSHA256)
+	}
+	if cfg.PrimaryLlamaArgs != nil {
+		t.Errorf("PrimaryLlamaArgs default = %v, want nil (empty CSV → lifecycle.go uses const)", cfg.PrimaryLlamaArgs)
+	}
+	if cfg.PrimaryWhisperWeightsKey != "whisper-large-v3/v1.0.0/model.tar.gz" {
+		t.Errorf("PrimaryWhisperWeightsKey = %q, want whisper-large-v3/v1.0.0/model.tar.gz", cfg.PrimaryWhisperWeightsKey)
+	}
+	if cfg.PrimaryBGEM3WeightsKey != "bge-m3/v1.0.0/model.tar.gz" {
+		t.Errorf("PrimaryBGEM3WeightsKey = %q, want bge-m3/v1.0.0/model.tar.gz", cfg.PrimaryBGEM3WeightsKey)
+	}
+	if cfg.PrimaryVastPriceCapDPH != 0.40 {
+		t.Errorf("PrimaryVastPriceCapDPH = %v, want 0.40", cfg.PrimaryVastPriceCapDPH)
+	}
+	if cfg.MonthlyPrimaryBudgetBRL != 800.0 {
+		t.Errorf("MonthlyPrimaryBudgetBRL = %v, want 800.0 (Pitfall #12 separate from emergency)", cfg.MonthlyPrimaryBudgetBRL)
+	}
+}
+
+// TestConfig_PrimaryPod_EnvOverride exercises atoiOr / boolOr / floatOr /
+// csvOr overrides for representative Phase 6.6 env vars.
+func TestConfig_PrimaryPod_EnvOverride(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	t.Setenv("PRIMARY_POD_SCHEDULE_UP_HOUR", "7")
+	t.Setenv("PRIMARY_POD_SCHEDULE_DISABLED", "false")
+	t.Setenv("PRIMARY_VAST_PRICE_CAP_DPH", "0.50")
+	t.Setenv("PRIMARY_LLAMA_ARGS", "--host,0.0.0.0,--port,8000")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryPodScheduleUpHour != 7 {
+		t.Errorf("PrimaryPodScheduleUpHour override = %d, want 7", cfg.PrimaryPodScheduleUpHour)
+	}
+	if cfg.PrimaryPodScheduleDisabled {
+		t.Errorf("PrimaryPodScheduleDisabled override: want false")
+	}
+	if cfg.PrimaryVastPriceCapDPH != 0.50 {
+		t.Errorf("PrimaryVastPriceCapDPH override = %v, want 0.50", cfg.PrimaryVastPriceCapDPH)
+	}
+	if got := cfg.PrimaryLlamaArgs; len(got) != 4 ||
+		got[0] != "--host" || got[1] != "0.0.0.0" ||
+		got[2] != "--port" || got[3] != "8000" {
+		t.Errorf("PrimaryLlamaArgs override = %v, want [--host 0.0.0.0 --port 8000]", got)
+	}
+}
+
+// TestConfig_PrimaryPod_DaysCSVParse confirms csvOr handles the schedule
+// days override correctly (trimming whitespace, preserving order).
+func TestConfig_PrimaryPod_DaysCSVParse(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	t.Setenv("PRIMARY_POD_SCHEDULE_DAYS", "tue,wed,thu")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if got := cfg.PrimaryPodScheduleDays; len(got) != 3 ||
+		got[0] != "tue" || got[1] != "wed" || got[2] != "thu" {
+		t.Errorf("PrimaryPodScheduleDays override = %v, want [tue wed thu]", got)
+	}
+}
+
+// TestConfig_PrimaryPod_WhisperSHANoDefault enforces reviews consensus
+// action #6 — fail-fast SHA policy. Operator MUST set the env explicitly;
+// Plan 06.6-04 buildPrimaryCreateRequest rejects empty values.
+func TestConfig_PrimaryPod_WhisperSHANoDefault(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryWhisperWeightsSHA256 != "" {
+		t.Errorf("PrimaryWhisperWeightsSHA256 = %q, want empty (reviews #6 fail-fast — operator must set explicitly)", cfg.PrimaryWhisperWeightsSHA256)
+	}
+}
+
+// TestConfig_PrimaryPod_BGEM3SHANoDefault — same fail-fast policy as
+// TestConfig_PrimaryPod_WhisperSHANoDefault for BGE-M3 embedding weights.
+func TestConfig_PrimaryPod_BGEM3SHANoDefault(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryBGEM3WeightsSHA256 != "" {
+		t.Errorf("PrimaryBGEM3WeightsSHA256 = %q, want empty (reviews #6 fail-fast)", cfg.PrimaryBGEM3WeightsSHA256)
+	}
+}
+
+// TestConfig_PrimaryPod_FailureCooldownDefault enforces the 300s default
+// (scaled-up vs emerg ProvisionFailureCooldownSeconds=60 — schedule cadence
+// is hourly, not per-failover-event). Plan 06.6-06a reconciler consumer.
+func TestConfig_PrimaryPod_FailureCooldownDefault(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryProvisionFailureCooldownSeconds != 300 {
+		t.Errorf("PrimaryProvisionFailureCooldownSeconds default = %d, want 300 (5min scaled-up vs emerg 60s)", cfg.PrimaryProvisionFailureCooldownSeconds)
+	}
+	t.Setenv("PRIMARY_PROVISION_FAILURE_COOLDOWN_SECONDS", "120")
+	cfg2, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg2.PrimaryProvisionFailureCooldownSeconds != 120 {
+		t.Errorf("PrimaryProvisionFailureCooldownSeconds override = %d, want 120", cfg2.PrimaryProvisionFailureCooldownSeconds)
+	}
+}
+
+// TestConfig_PrimaryPod_ProvisionLeadDefault enforces 1800s default (30min
+// pre-warm offset) per reviews consensus action #8. Plan 06.6-05 consumer.
+func TestConfig_PrimaryPod_ProvisionLeadDefault(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryPodScheduleProvisionLeadSeconds != 1800 {
+		t.Errorf("PrimaryPodScheduleProvisionLeadSeconds default = %d, want 1800 (30min pre-warm; reviews #8)", cfg.PrimaryPodScheduleProvisionLeadSeconds)
+	}
+	t.Setenv("PRIMARY_POD_SCHEDULE_PROVISION_LEAD_SECONDS", "2400")
+	cfg2, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg2.PrimaryPodScheduleProvisionLeadSeconds != 2400 {
+		t.Errorf("PrimaryPodScheduleProvisionLeadSeconds override = %d, want 2400", cfg2.PrimaryPodScheduleProvisionLeadSeconds)
+	}
+}
+
+// TestConfig_PrimaryPod_ColdStartBudget40MinDefault enforces WAVE0-GATES
+// Decision 6 — 2400s (40min) generous margin accommodating slow inet hosts
+// + multi-stage image pull + aria2c weight download + 4-service supervisord
+// startup. Reconciler treats >40min as provision failure.
+func TestConfig_PrimaryPod_ColdStartBudget40MinDefault(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryProvisionColdStartBudgetSeconds != 2400 {
+		t.Errorf("PrimaryProvisionColdStartBudgetSeconds default = %d, want 2400 (WAVE0-GATES Decision 6 40min budget)", cfg.PrimaryProvisionColdStartBudgetSeconds)
+	}
+}
+
+// TestConfig_PrimaryPod_TemplateImageIsB9191SHAPinned asserts the literal
+// b9191 digest from WAVE0-GATES Decision 1. Wave 0 spike
+// (06.6-SPIKE-qwen3.6-jinja.md Round 3) proved that prior b9128 builds fail
+// Qwen3.6 SSM tensor load with `missing tensor 'blk.64.ssm_conv1d.weight'`
+// — b9191 includes upstream PRs #23121 + #22384 that add SSM/recurrent
+// model support. This test enforces the upgrade at the config layer.
+func TestConfig_PrimaryPod_TemplateImageIsB9191SHAPinned(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(cfg.PrimaryTemplateImage, "server-cuda-b9191") {
+		t.Errorf("PrimaryTemplateImage = %q, must contain server-cuda-b9191 (WAVE0-GATES Decision 1 — UPGRADED from prior b9128 build)", cfg.PrimaryTemplateImage)
+	}
+	if !strings.Contains(cfg.PrimaryTemplateImage, "@sha256:cb375311f4170bb1aa18840e946f64f99e6094b90bde69dcb6e0a62a183d7ba3") {
+		t.Errorf("PrimaryTemplateImage = %q, must contain @sha256:cb375311f4170bb1aa18840e946f64f99e6094b90bde69dcb6e0a62a183d7ba3 (WAVE0-GATES Decision 1 locked digest)", cfg.PrimaryTemplateImage)
+	}
+	// Negative assertion: confirm prior build is NOT the default for the
+	// PRIMARY pod path (Phase 6 emergency pod continues on its own build —
+	// scoped to PrimaryTemplateImage field only, NOT EmergencyTemplateImage).
+	if strings.Contains(cfg.PrimaryTemplateImage, "server-cuda-b9128") {
+		t.Errorf("PrimaryTemplateImage = %q, must NOT use prior b9128 build — Wave 0 spike Round 3 empirically proved it fails Qwen3.6 SSM tensor load", cfg.PrimaryTemplateImage)
+	}
+}
+
+// TestConfig_PrimaryPod_AllUpstreamImagesSHAPinned enforces all 4
+// WAVE0-GATES Decision 1 digests — proves the OCI image references the
+// custom multi-stage build (Plan 06.6-04) consumes are locked at the
+// config layer. Image bumps require WAVE0-GATES amendment + operator
+// sign-off (T-06.6-SC tampering mitigation).
+func TestConfig_PrimaryPod_AllUpstreamImagesSHAPinned(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(cfg.PrimaryTemplateImage, "@sha256:cb37") {
+		t.Errorf("PrimaryTemplateImage missing @sha256:cb37 digest prefix: %q", cfg.PrimaryTemplateImage)
+	}
+	if !strings.Contains(cfg.PrimarySpeachesImage, "@sha256:5c62") {
+		t.Errorf("PrimarySpeachesImage missing @sha256:5c62 digest prefix: %q", cfg.PrimarySpeachesImage)
+	}
+	if !strings.Contains(cfg.PrimaryInfinityImage, "@sha256:11e8") {
+		t.Errorf("PrimaryInfinityImage missing @sha256:11e8 digest prefix: %q", cfg.PrimaryInfinityImage)
+	}
+	if !strings.Contains(cfg.PrimaryDCGMImage, "@sha256:60d3") {
+		t.Errorf("PrimaryDCGMImage missing @sha256:60d3 digest prefix: %q", cfg.PrimaryDCGMImage)
+	}
+}
+
+// TestConfig_PrimaryPod_DisabledDefaultsTrue_SoakGate enforces WAVE0-GATES
+// Decision 5 soak gate. Operator manual flip to false required after Plan
+// 06.6-11 Live UAT GREEN. Prevents scheduled provisioning from kicking in
+// during soak period when integrations may still be debugged. Same pattern
+// as Phase 6 PR2 EMERGENCY_POD_DISABLED=true initial deploy.
+func TestConfig_PrimaryPod_DisabledDefaultsTrue_SoakGate(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !cfg.PrimaryPodScheduleDisabled {
+		t.Errorf("PrimaryPodScheduleDisabled default = false, want true (WAVE0-GATES Decision 5 soak gate — operator manual flip after UAT GREEN)")
+	}
+}
+
+// TestConfig_PrimaryPod_JinjaDefaultsEmpty_B1Embedded enforces WAVE0-GATES
+// Decision 3 — B1 GGUF-embedded Jinja LOCKED. The `--jinja` flag alone
+// (no `--chat-template-file`) extracts PEG-native parser from the Qwen3.6
+// GGUF chat_template. Wave 0 spike Round 3 validated tool-calling end-to-
+// end: `chat_format: peg-native`, `tool_calls[0].function.arguments=
+// {"location":"São Paulo"}`. Override via env permitted for future B2
+// MinIO fallback.
+func TestConfig_PrimaryPod_JinjaDefaultsEmpty_B1Embedded(t *testing.T) {
+	clearAll(t)
+	clearPhase3(t)
+	clearPhase4(t)
+	clearPhase6(t)
+	clearPhase6_6(t)
+	setAllRequired(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if cfg.PrimaryQwenJinjaKey != "" {
+		t.Errorf("PrimaryQwenJinjaKey default = %q, want empty (WAVE0-GATES Decision 3 B1 GGUF-embedded LOCKED)", cfg.PrimaryQwenJinjaKey)
+	}
+	if cfg.PrimaryQwenJinjaSHA256 != "" {
+		t.Errorf("PrimaryQwenJinjaSHA256 default = %q, want empty (WAVE0-GATES Decision 3 B1 embedded)", cfg.PrimaryQwenJinjaSHA256)
+	}
+}
