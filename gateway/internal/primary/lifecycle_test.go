@@ -513,10 +513,16 @@ func TestSupervisordConf_4ProgramBlocks(t *testing.T) {
 	require.Contains(t, src, "0.0.0.0:9400", "dcgm-exporter must bind to 0.0.0.0:9400 (D-07)")
 }
 
-// TestDockerfile_4FromStages — Task 1 structural assertion on
-// pod/primary/Dockerfile: exactly 4 SHA-pinned FROM lines + COPY from
-// each upstream stage + apt-get install supervisor.
-func TestDockerfile_4FromStages(t *testing.T) {
+// TestDockerfile_HybridStages — Task 1 structural assertion on
+// pod/primary/Dockerfile (revised post-build empirical fix): exactly 2
+// SHA-pinned FROM stages remain (dcgm-stage + final llama.cpp b9191).
+// Speaches and Infinity are installed via pip in the final stage because
+// (a) speaches has no /app dir + only ships container images (not PyPI),
+// and (b) Python venvs cannot be relocated via multi-stage COPY without
+// breaking absolute paths baked into shebangs + pyvenv.cfg + dist-info
+// RECORD manifests. SHA-pin invariant is preserved for the runtime-
+// critical llama.cpp b9191 (Qwen3.6 SSM tensor support — non-substitutable).
+func TestDockerfile_HybridStages(t *testing.T) {
 	dockerfilePath := filepath.Join(repoRoot(t), "pod", "primary", "Dockerfile")
 	data, err := os.ReadFile(dockerfilePath)
 	require.NoError(t, err, "Dockerfile must exist at %s", dockerfilePath)
@@ -524,15 +530,17 @@ func TestDockerfile_4FromStages(t *testing.T) {
 
 	fromLine := regexp.MustCompile(`(?m)^FROM\s+\S+@sha256:[0-9a-f]{64}\s+AS\s+\S+`)
 	matches := fromLine.FindAllString(src, -1)
-	require.Len(t, matches, 4, "Dockerfile must have exactly 4 SHA-pinned FROM ... AS ... lines")
+	require.Len(t, matches, 2, "Dockerfile must have exactly 2 SHA-pinned FROM ... AS ... lines (dcgm-stage + final)")
 
 	require.Contains(t, src, "server-cuda-b9191@sha256:cb37",
 		"final stage must use llama.cpp b9191 (Wave 0 UPGRADED from b9128)")
-	require.Contains(t, src, "COPY --from=speaches-stage")
-	require.Contains(t, src, "COPY --from=infinity-stage")
 	require.Contains(t, src, "COPY --from=dcgm-stage")
-	require.Regexp(t, regexp.MustCompile(`apt-get\s+install.*supervisor`), src,
+	require.Regexp(t, regexp.MustCompile(`(?s)apt-get\s+install.*supervisor`), src,
 		"final stage must install supervisor via apt-get")
+	require.Regexp(t, regexp.MustCompile(`(?s)pip\s+install.*speaches`), src,
+		"final stage must install Speaches via pip (git+https github tarball — speaches not on PyPI)")
+	require.Regexp(t, regexp.MustCompile(`(?s)pip\s+install.*infinity-emb`), src,
+		"final stage must install Infinity via pip (PyPI infinity-emb[all]==0.0.77)")
 }
 
 // TestPrimaryLlamaArgsDefault_NoChatTemplateFile — Wave 0 Decision 3
