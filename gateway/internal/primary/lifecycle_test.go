@@ -210,12 +210,12 @@ func TestPrimaryOnstart_StartsWithSetEuo(t *testing.T) {
 	req, err := r.buildCreateRequest(vast.Offer{ID: 1}, 1)
 	require.NoError(t, err)
 
-	head := req.Args[1]
-	if len(head) > 200 {
-		head = head[:200]
-	}
-	require.Contains(t, head, "set -euo pipefail")
-	require.NotContains(t, head, "set -euxo")
+	// Reviews #7: bash strict mode must be present (the optional sshd
+	// debug block runs before `set -euo` so the operator can still SSH
+	// in when env-var checks fail; that block is independently safe via
+	// `${VAR:-}` defaults). Look anywhere in the script.
+	require.Contains(t, req.Args[1], "set -euo pipefail")
+	require.NotContains(t, req.Args[1], "set -euxo")
 }
 
 // TestPrimaryOnstart_NoSetX_NoSecretLeak — reviews #7: full-script grep

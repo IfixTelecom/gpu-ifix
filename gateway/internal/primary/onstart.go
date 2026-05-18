@@ -81,8 +81,30 @@ var primaryLlamaArgsDefault = []string{
 // here — but TestPrimaryOnstartLengthBelowLimit asserts < 14KB as a
 // regression net.
 const primaryOnstartHead = `#!/bin/bash
+# Onstart trace: every step writes a marker to /tmp/onstart.log so SSH
+# inspection can see how far the script got even if it later exits.
+exec > >(tee -a /tmp/onstart.log) 2>&1
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: enter (PID $$)"
+
+# Setup sshd FIRST (before env checks) so the operator can SSH in during
+# the boot window even if a later env check fails.
+if [ -n "${POD_DEBUG_SSH_PUBLIC_KEY:-}" ]; then
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: setting up sshd"
+  mkdir -p /root/.ssh /run/sshd
+  printf '%s\n' "$POD_DEBUG_SSH_PUBLIC_KEY" > /root/.ssh/authorized_keys
+  chmod 700 /root/.ssh
+  chmod 600 /root/.ssh/authorized_keys
+  if ! command -v sshd >/dev/null 2>&1; then
+    apt-get update -qq && apt-get install -y -qq openssh-server >/dev/null
+  fi
+  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config 2>/dev/null || true
+  /usr/sbin/sshd
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: sshd started"
+fi
+
 set -euo pipefail
 
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: checking env vars"
 : "${MINIO_ENDPOINT:?required}"
 : "${MINIO_BUCKET:?required}"
 : "${MINIO_ACCESS_KEY:?required}"
@@ -93,25 +115,17 @@ set -euo pipefail
 : "${PRIMARY_WHISPER_WEIGHTS_SHA256:?required}"
 : "${PRIMARY_BGEM3_WEIGHTS_KEY:?required}"
 : "${PRIMARY_BGEM3_WEIGHTS_SHA256:?required}"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: env vars OK"
 
-if [ -n "${POD_DEBUG_SSH_PUBLIC_KEY:-}" ]; then
-  mkdir -p /root/.ssh
-  printf '%s\n' "$POD_DEBUG_SSH_PUBLIC_KEY" > /root/.ssh/authorized_keys
-  chmod 700 /root/.ssh
-  chmod 600 /root/.ssh/authorized_keys
-  if ! command -v sshd >/dev/null 2>&1; then
-    apt-get update -qq && apt-get install -y -qq openssh-server >/dev/null
-  fi
-  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config 2>/dev/null || true
-  /usr/sbin/sshd
-fi
-
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: installing mc if missing"
 if ! command -v mc >/dev/null 2>&1; then
   curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
   chmod +x /usr/local/bin/mc
 fi
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: mc ready"
 
 mc alias set ifix "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY" >/dev/null
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: minio alias set"
 
 download_with_verify() {
   local key="$1" target="$2" sha="$3"
@@ -125,6 +139,7 @@ download_with_verify() {
 
 mkdir -p /weights/qwen /weights/whisper /weights/bge-m3 /app/templates
 
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: spawning 3 parallel downloads"
 download_with_verify "$PRIMARY_QWEN_WEIGHTS_KEY" "/weights/qwen/model.gguf" "$PRIMARY_QWEN_WEIGHTS_SHA256" &
 QWEN_PID=$!
 download_with_verify "$PRIMARY_WHISPER_WEIGHTS_KEY" "/weights/whisper/model.tar.gz" "$PRIMARY_WHISPER_WEIGHTS_SHA256" &
@@ -137,10 +152,13 @@ if [ -n "${PRIMARY_QWEN_JINJA_KEY:-}" ]; then
   download_with_verify "$PRIMARY_QWEN_JINJA_KEY" "/app/templates/qwen3.6.jinja" "$PRIMARY_QWEN_JINJA_SHA256"
 fi
 
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: waiting for 3 downloads"
 wait "$QWEN_PID" "$WHISPER_PID" "$BGE_PID"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: 3 downloads complete; extracting tarballs"
 
 tar -xzf /weights/whisper/model.tar.gz -C /weights/whisper
 tar -xzf /weights/bge-m3/model.tar.gz -C /weights/bge-m3
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] onstart: extraction done; exec supervisord"
 
 `
 
