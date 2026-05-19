@@ -81,18 +81,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    factory crashed with
 #    `ChatInterface.__init__() got an unexpected keyword argument 'type'`
 #    on attempt 12. Pinning gradio<6.0 keeps the speaches UI factory happy.
-#  - faster-whisper UNPINNED (resolves to 1.1.x as of UAT 16) — Initially
-#    tried `faster-whisper<1.1` for UAT 15 S3 fix, but speaches 0.9.0rc3
-#    imports `BatchedInferencePipeline` (added in faster-whisper 1.1.0), so
-#    the pin caused ImportError + crash-loop. silero v5 assets are vendored
-#    via multi-stage COPY from speaches-assets stage below — independent of
-#    the faster-whisper version.
+#  - faster-whisper==1.1.1 — UAT 17 (2026-05-19) caught TypeError in
+#    `faster_whisper/transcribe.py:429`: `int() argument must be a string,
+#    a bytes-like object or a real number, not 'list'`. Trace: speaches
+#    `silero_vad_v5.merge_segments()` returns dicts with keys
+#    `{start, end, segments}` where `segments` is a list of (start,end)
+#    tuples. faster-whisper 1.2.x added strict clip_timestamps validation
+#    that iterates dict.items() and casts each value to int(v * rate),
+#    crashing on the list. Upstream speaches Docker image ships with
+#    faster-whisper 1.1.1 which tolerates the extra key. Match that
+#    version exactly. Earlier UAT 15 tried `<1.1` but speaches needs
+#    `BatchedInferencePipeline` (added in 1.1.0), so we're sandwiched —
+#    pin to the exact 1.1.1. silero v5 assets are vendored independently
+#    via multi-stage COPY from speaches-assets stage below.
 RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
          "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
-         "onnx-asr<0.10.0" "gradio<6.0" \
+         "onnx-asr<0.10.0" "gradio<6.0" "faster-whisper==1.1.1" \
     && python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
