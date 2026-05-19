@@ -61,17 +61,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    `optimum[bettertransformer]` was a no-op because that extras key does
 #    not exist; pip silently fell back to plain optimum at the latest
 #    version (2.1.0 today) and Infinity crash-looped on import (attempt 11).
+#  - transformers<4.49 — optimum 1.x bettertransformer imports gate at
+#    `transformers<4.49`; attempt 12 surfaced
+#    `RuntimeError: BetterTransformer requires transformers<4.49 but found
+#    4.57.6`. infinity-emb[all] doesn't cap transformers, so we pin it here.
+#  - gradio<6.0 — speaches 0.9.0rc3 builds its UI with Gradio 5.x API
+#    (`ChatInterface(type=...)`); Gradio 6.0 removed that keyword and the
+#    factory crashed with
+#    `ChatInterface.__init__() got an unexpected keyword argument 'type'`
+#    on attempt 12. Pinning gradio<6.0 keeps the speaches UI factory happy.
 RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
          "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
-         "onnx-asr<0.10.0" \
+         "onnx-asr<0.10.0" "gradio<6.0" \
     && python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
     && /opt/infinity-venv/bin/pip install --no-cache-dir \
-         "optimum<2.0"
+         "optimum<2.0" "transformers<4.49"
 
 # Pre-create the realtime-console stub directory speaches 0.9.0rc3 mounts
 # at /v1/realtime via StaticFiles(directory="realtime-console/dist",
