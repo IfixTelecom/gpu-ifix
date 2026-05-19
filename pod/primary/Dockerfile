@@ -32,6 +32,17 @@
 # (statically linked, portable across distros — multi-stage COPY safe).
 FROM nvcr.io/nvidia/k8s/dcgm-exporter:4.5.3-4.8.2-distroless@sha256:60d3b00ac80b4ae77f94dae2f943685605585ad9e92fdccda3154d009ae317cc AS dcgm-stage
 
+# Stage 1b: Upstream speaches image — source of silero_encoder_v5.onnx +
+# silero_decoder_v5.onnx ONNX files. Speaches 0.9.0rc3 code (executors/
+# silero_vad_v5.py) loads these from faster_whisper's assets dir, but
+# neither faster-whisper 1.0.x nor 1.1.x ship the v5 split assets — upstream
+# speaches Dockerfile vendors them manually. We multi-stage COPY rather
+# than fetch from a public URL because the Silero VAD repo removed the v5
+# files from src/silero_vad/data/ (only v4 + v6 remain). UAT 15 (2026-05-19)
+# /v1/audio/transcriptions crashed with `onnxruntime.NoSuchFile` until
+# these were vendored.
+FROM ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cuda-12.6.3 AS speaches-assets
+
 # Stage 2: Final image — llama.cpp:server-cuda-b9191 carries Qwen3.6 SSM
 # support (Wave 0 UPGRADED from b9128 per 06.6-SPIKE-qwen3.6-jinja.md Round 3
 # tensor-blk-64 SSM pass). All 4 services co-locate here under supervisord.
@@ -70,18 +81,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    factory crashed with
 #    `ChatInterface.__init__() got an unexpected keyword argument 'type'`
 #    on attempt 12. Pinning gradio<6.0 keeps the speaches UI factory happy.
-#  - faster-whisper<1.1 — UAT 15 (2026-05-19) caught transcription crash:
-#    `onnxruntime.NoSuchFile: silero_encoder_v5.onnx`. faster-whisper 1.1.x
-#    ships only `silero_vad_v6.onnx` (combined V6 VAD); speaches 0.9.0rc3
-#    code path loads the V5 encoder/decoder split. Pin <1.1 so the v5
-#    assets (silero_encoder_v5.onnx + silero_decoder_v5.onnx) ship in
-#    /opt/speaches-venv/lib/python3.12/site-packages/faster_whisper/assets/.
+#  - faster-whisper UNPINNED (resolves to 1.1.x as of UAT 16) — Initially
+#    tried `faster-whisper<1.1` for UAT 15 S3 fix, but speaches 0.9.0rc3
+#    imports `BatchedInferencePipeline` (added in faster-whisper 1.1.0), so
+#    the pin caused ImportError + crash-loop. silero v5 assets are vendored
+#    via multi-stage COPY from speaches-assets stage below — independent of
+#    the faster-whisper version.
 RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
          "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
-         "onnx-asr<0.10.0" "gradio<6.0" "faster-whisper<1.1" \
+         "onnx-asr<0.10.0" "gradio<6.0" \
     && python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
@@ -101,6 +112,21 @@ RUN mkdir -p /opt/speaches-data/realtime-console/dist \
     && echo '<!DOCTYPE html><html><body>realtime-console stub (not served)</body></html>' \
        > /opt/speaches-data/realtime-console/dist/index.html \
     && echo '{}' > /opt/speaches-data/model_aliases.json
+
+# Vendor silero v5 encoder + decoder ONNX assets from upstream speaches
+# image. speaches/executors/silero_vad_v5.py loads these from
+# `faster_whisper.utils.get_assets_path()` (which resolves to
+# /opt/speaches-venv/lib/python3.12/site-packages/faster_whisper/assets/).
+# faster-whisper 1.0.x ships silero_vad.onnx and 1.1.x ships
+# silero_vad_v6.onnx — NEITHER ships the v5 split files speaches needs at
+# transcription time. UAT 15 (2026-05-19) confirmed this is the root
+# cause of `Internal Server Error` on POST /v1/audio/transcriptions.
+COPY --from=speaches-assets \
+    /home/ubuntu/speaches/.venv/lib/python3.12/site-packages/faster_whisper/assets/silero_encoder_v5.onnx \
+    /opt/speaches-venv/lib/python3.12/site-packages/faster_whisper/assets/silero_encoder_v5.onnx
+COPY --from=speaches-assets \
+    /home/ubuntu/speaches/.venv/lib/python3.12/site-packages/faster_whisper/assets/silero_decoder_v5.onnx \
+    /opt/speaches-venv/lib/python3.12/site-packages/faster_whisper/assets/silero_decoder_v5.onnx
 
 # Copy dcgm-exporter binary AND the libdcgm.so.4 family + metric configs
 # from stage 1. The distroless dcgm-exporter image bundles libdcgm under
