@@ -146,6 +146,7 @@ type Config struct {
 	VastAIAPIKey                      string   // VAST_AI_API_KEY (D-A5; empty = Phase 6 disabled with warning, NOT fail-loud)
 	VastAPIQPSLimit                   int      // VAST_API_QPS_LIMIT (default 1; RESEARCH Open Question 12 — conservative 1 req/s token bucket)
 	VastPriceCapDPH                   float64  // VAST_PRICE_CAP_DPH (default 0.40; RTX 4090 cap; epsilon comparison cap+0.0001 per Pitfall 5)
+	VastGPUName                       string   // VAST_GPU_NAME (default "RTX 4090"; emerg pod GPU model — kept cheap because emerg is LLM-only fallback)
 
 	// Phase 6.6 — primary pod auto-provisioning (schedule-driven; D-08 +
 	// Decisions Resolved #5 + WAVE0-GATES.md Decisions 1+3+5+6 + Reviews
@@ -180,7 +181,8 @@ type Config struct {
 	PrimaryWhisperWeightsSHA256            string   // PRIMARY_WHISPER_WEIGHTS_SHA256 (FAIL-FAST policy per reviews consensus action #6 — Plan 06.6-04 buildPrimaryCreateRequest REJECTS empty value at build time with ErrMissingWhisperSHA; operator MUST set this env before deploy)
 	PrimaryBGEM3WeightsKey                 string   // PRIMARY_BGEM3_WEIGHTS_KEY (MinIO; default bge-m3/v1.0.0/model.tar.gz)
 	PrimaryBGEM3WeightsSHA256              string   // PRIMARY_BGEM3_WEIGHTS_SHA256 (FAIL-FAST policy per reviews consensus action #6 — same as Whisper SHA above)
-	PrimaryVastPriceCapDPH                 float64  // PRIMARY_VAST_PRICE_CAP_DPH (default 0.40; RTX 4090 cap; epsilon comparison cap+0.0001 per Pitfall 5)
+	PrimaryVastPriceCapDPH                 float64  // PRIMARY_VAST_PRICE_CAP_DPH (default 2.20; RTX 5090 EU cap — UAT 17 2026-05-19 picked 5090 32 GB to fit Qwen 27B + bge-m3 + KV cache + whisper-large-v3 GPU (~26 GB workload; 4090 24 GB hit CUDA OOM UAT 16); EU 5090 inventory cheapest ~$2.00/h Spain ES; epsilon comparison cap+0.0001 per Pitfall 5)
+	PrimaryGPUName                         string   // PRIMARY_GPU_NAME (default "RTX 5090"; primary pod GPU model — large headroom for full 4-service GPU offload including whisper-large-v3 STT)
 	PrimaryProvisionColdStartBudgetSeconds int      // PRIMARY_PROVISION_COLDSTART_BUDGET_SECONDS (default 2400 = 40min; WAVE0-GATES Decision 6 — generous margin for slow inet hosts + multi-stage image pull + aria2c weight download + 4-service supervisord startup; reconciler treats >40min as provision failure)
 	PrimaryProvisionFailureCooldownSeconds int      // PRIMARY_PROVISION_FAILURE_COOLDOWN_SECONDS (default 300 = 5min; mirror emerg's ProvisionFailureCooldownSeconds=60 scaled-up for schedule cadence; Plan 06.6-06a reconciler.evaluateAsleep enforces)
 	MonthlyPrimaryBudgetBRL                float64  // MONTHLY_PRIMARY_BUDGET_BRL (default 800.0; Pitfall #12 separate from emergency budget — primary pod runs ~14h × 22 days × $0.40 ≈ R$130/mo, budget gives 5x headroom for soak phase)
@@ -320,6 +322,7 @@ func Load() (Config, error) {
 		VastAIAPIKey:                      os.Getenv("VAST_AI_API_KEY"),
 		VastAPIQPSLimit:                   atoiOr(os.Getenv("VAST_API_QPS_LIMIT"), 1),
 		VastPriceCapDPH:                   floatOr(os.Getenv("VAST_PRICE_CAP_DPH"), 0.40),
+		VastGPUName:                       envOr("VAST_GPU_NAME", "RTX 4090"),
 
 		// Phase 6.6 — primary pod auto-provisioning (schedule-driven).
 		// Defaults match WAVE0-GATES.md operator-locked Decisions 1+3+5+6
@@ -342,7 +345,8 @@ func Load() (Config, error) {
 		PrimaryBGEM3WeightsKey:      envOr("PRIMARY_BGEM3_WEIGHTS_KEY", "bge-m3/v1.0.0/model.tar.gz"),
 		// FAIL-FAST policy per reviews consensus action #6 — same as Whisper SHA above.
 		PrimaryBGEM3WeightsSHA256:              os.Getenv("PRIMARY_BGEM3_WEIGHTS_SHA256"),
-		PrimaryVastPriceCapDPH:                 floatOr(os.Getenv("PRIMARY_VAST_PRICE_CAP_DPH"), 0.40),
+		PrimaryVastPriceCapDPH:                 floatOr(os.Getenv("PRIMARY_VAST_PRICE_CAP_DPH"), 2.20),
+		PrimaryGPUName:                         envOr("PRIMARY_GPU_NAME", "RTX 5090"),
 		PrimaryProvisionColdStartBudgetSeconds: atoiOr(os.Getenv("PRIMARY_PROVISION_COLDSTART_BUDGET_SECONDS"), 2400),
 		PrimaryProvisionFailureCooldownSeconds: atoiOr(os.Getenv("PRIMARY_PROVISION_FAILURE_COOLDOWN_SECONDS"), 300),
 		MonthlyPrimaryBudgetBRL:                floatOr(os.Getenv("MONTHLY_PRIMARY_BUDGET_BRL"), 800.0),

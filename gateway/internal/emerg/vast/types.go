@@ -189,8 +189,14 @@ type CreateResponse struct {
 type SearchFilter map[string]any
 
 // DefaultSearchFilter returns the canonical Phase 6 filter per CONTEXT.md
-// D-A2: RTX 4090, ≥0.99 reliability, ≤cap dph_total, ≥500 Mbps inet_down,
+// D-A2: ≥0.99 reliability, ≤cap dph_total, ≥500 Mbps inet_down,
 // ≥12.6 cuda_max_good, driver ≥570, ordered by dph_total ascending limit 20.
+//
+// `gpuName` is the gpu_name eq filter — emerg pods default to "RTX 4090"
+// (cheap fallback for the LLM-only emerg path); primary pods default to
+// "RTX 5090" (32 GB VRAM fits Qwen 27B + bge-m3 + KV cache + whisper-large-v3
+// GPU offload; the 4090's 24 GB cannot fit STT GPU per UAT 16 CUDA OOM
+// finding 2026-05-19).
 //
 // Driver version gate (UAT 17 2026-05-19): the llama.cpp:server-cuda-b9191
 // image bundles CUDA 12.8 runtime libraries which require host driver
@@ -202,9 +208,9 @@ type SearchFilter map[string]any
 //
 // `primaryHostID` excludes the primary's host when known (>0); pass 0 to
 // disable the host_id filter when the primary host is unknown (D-A2).
-func DefaultSearchFilter(maxDPH float64, primaryHostID int64) SearchFilter {
+func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string) SearchFilter {
 	f := SearchFilter{
-		"gpu_name":      map[string]any{"eq": "RTX 4090"},
+		"gpu_name":      map[string]any{"eq": gpuName},
 		"num_gpus":      map[string]any{"eq": 1},
 		"reliability":   map[string]any{"gte": 0.99},
 		"dph_total":     map[string]any{"lte": maxDPH},

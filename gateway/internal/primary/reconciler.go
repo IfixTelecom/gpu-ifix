@@ -746,7 +746,7 @@ func (r *Reconciler) provisionLifecycle(ctx context.Context, lifecycleID int64, 
 		_ = r.closeLifecycle(ctx, lifecycleID, "no_vast_client", 0)
 		return errors.New("primary: no Vast.ai client wired")
 	}
-	filter := vast.DefaultSearchFilter(r.cfg.PrimaryVastPriceCapDPH, r.cfg.PrimaryHostID)
+	filter := vast.DefaultSearchFilter(r.cfg.PrimaryVastPriceCapDPH, r.cfg.PrimaryHostID, r.cfg.PrimaryGPUName)
 	// UAT 2026-05-18: 4 attempts failed because Vast picked hosts globally
 	// (US/Asia) with insufficient inet bandwidth to fetch 21 GB of weights
 	// from MinIO (s3.ifixtelecom.com.br, Hetzner DE) within the aria2c

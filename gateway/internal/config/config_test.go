@@ -923,8 +923,8 @@ func TestConfig_PrimaryPod_DefaultsLoaded(t *testing.T) {
 	if cfg.PrimaryBGEM3WeightsKey != "bge-m3/v1.0.0/model.tar.gz" {
 		t.Errorf("PrimaryBGEM3WeightsKey = %q, want bge-m3/v1.0.0/model.tar.gz", cfg.PrimaryBGEM3WeightsKey)
 	}
-	if cfg.PrimaryVastPriceCapDPH != 0.40 {
-		t.Errorf("PrimaryVastPriceCapDPH = %v, want 0.40", cfg.PrimaryVastPriceCapDPH)
+	if cfg.PrimaryVastPriceCapDPH != 2.20 {
+		t.Errorf("PrimaryVastPriceCapDPH = %v, want 2.20 (RTX 5090 EU cap; UAT 17 follow-up)", cfg.PrimaryVastPriceCapDPH)
 	}
 	if cfg.MonthlyPrimaryBudgetBRL != 800.0 {
 		t.Errorf("MonthlyPrimaryBudgetBRL = %v, want 800.0 (Pitfall #12 separate from emergency)", cfg.MonthlyPrimaryBudgetBRL)
