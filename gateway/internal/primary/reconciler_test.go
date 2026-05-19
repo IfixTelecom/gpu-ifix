@@ -682,6 +682,29 @@ func TestEvaluateReady_TransitionsToDrainingOutOfPeak(t *testing.T) {
 		"startDrain must RestoreTier0 for all 3 primary roles in order")
 }
 
+// UAT 14 follow-up (2026-05-19): under DISABLED, evaluateReady must
+// short-circuit so an operator force-up pod is not auto-drained by the
+// schedule (IsInPeak returns false when Disabled regardless of clock).
+func TestEvaluateReady_NoopWhenDisabled(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.PrimaryPodScheduleDisabled = true
+	fsm := NewFSM(nil, nil)
+	_ = fsm.Transition(StateAsleep, StateProvisioning, time.Now(), "x")
+	_ = fsm.Transition(StateProvisioning, StateReady, time.Now(), "x")
+	loader := newFakeLoader()
+	r := buildReconciler(t, Deps{
+		Cfg:    cfg,
+		FSM:    fsm,
+		Loader: loader,
+		Rule:   neverInPeakRule(),
+	})
+	r.evaluateReady(context.Background(), time.Now(), testLogger())
+	require.Equal(t, StateReady, r.deps.FSM.State(),
+		"DISABLED must short-circuit evaluateReady so operator force-up pod is not auto-drained")
+	require.Empty(t, loader.restoredRoles(),
+		"DISABLED evaluateReady must NOT call RestoreTier0")
+}
+
 // ===========================================================================
 // evaluateDraining tests
 // ===========================================================================
@@ -1064,10 +1087,81 @@ func TestStart_SkipsScheduleTicksWhenDisabled(t *testing.T) {
 	defer cancel()
 	r.Start(ctx)
 
-	// Wait 2 ticks (~2s) — schedule loop should observe DISABLED and skip.
+	// Wait 2 ticks (~2s) — evaluateAsleep observes DISABLED and short-circuits.
+	// evaluateTick still runs per UAT 14 fix; the gate is per-evaluator.
 	time.Sleep(2500 * time.Millisecond)
 	require.Equal(t, StateAsleep, r.deps.FSM.State(),
-		"DISABLED=true must prevent evaluateTick from firing — FSM stays Asleep")
+		"DISABLED=true must prevent evaluateAsleep from firing — FSM stays Asleep")
+}
+
+// UAT 14 follow-up (2026-05-19): under DISABLED, evaluateTick must still
+// route StateDraining→evaluateDraining so an operator force-down completes
+// drain → destroy. Pre-fix: runScheduleLoop early-returned on DISABLED
+// and froze a draining FSM forever.
+func TestEvaluateTick_AdvancesDrainingUnderDisabled(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.PrimaryPodScheduleDisabled = true
+	cfg.PrimaryPodScheduleGraceRampDownSeconds = 1
+	fsm := NewFSM(nil, nil)
+	fsm.SetState(StateDraining, time.Now(), "operator_force_down")
+	infl := newFakeInflight() // all 3 inflight = 0
+	r := buildReconciler(t, Deps{
+		Cfg:      cfg,
+		FSM:      fsm,
+		Inflight: infl,
+		Rule:     alwaysInPeakRule(),
+	})
+	drainStart := time.Now().Add(-1 * time.Second)
+	r.drainStartedAt.Store(&drainStart)
+
+	r.evaluateTick(context.Background(), time.Now(), testLogger())
+	require.Equal(t, StateDestroying, r.deps.FSM.State(),
+		"DISABLED must NOT block Draining→Destroying advancement (operator force-down completion)")
+}
+
+// UAT 14 follow-up (2026-05-19): boot must reset the gw:primary:state
+// Redis mirror when recovery completes with FSM at StateAsleep, so a
+// stale snapshot from before the restart (e.g. state=draining) does not
+// linger in the mirror and confuse gatewayctl primary state.
+func TestStart_BootResetsPrimaryStateMirror(t *testing.T) {
+	cfg := testCfg(t)
+	cfg.PrimaryPodScheduleDisabled = true // freeze evaluator ticks for assertion stability
+	rdb, mr := miniredisClient(t)
+	// Pre-populate mirror with a stale draining snapshot.
+	require.NoError(t, redisx.WritePrimaryState(context.Background(), rdb,
+		StateDraining.String(), "99", "http://stale:8000", "12345",
+		time.Now().Add(-1*time.Hour).Unix()))
+
+	fsm := NewFSM(nil, nil)
+	dbtx := &fakeDBTX{
+		queryRowFn: func(_ context.Context, _ string, _ ...interface{}) pgx.Row {
+			return noRowsRow{}
+		},
+	}
+	r := buildReconciler(t, Deps{
+		Cfg:   cfg,
+		FSM:   fsm,
+		Vast:  &fakeVast{},
+		Rule:  alwaysInPeakRule(),
+		Redis: rdb,
+	})
+	r.SetQueriesForTest(gen.New(dbtx))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r.Start(ctx)
+
+	// Boot path runs recoverOpenLifecycle synchronously then writes mirror
+	// before spawning goroutines — assertion is safe immediately.
+	key := redisx.PrimaryStateKey()
+	require.Equal(t, StateAsleep.String(), mr.HGet(key, "state"),
+		"boot mirror reset must replace stale state with asleep")
+	require.Empty(t, mr.HGet(key, "lifecycle_id"),
+		"boot mirror reset must clear stale lifecycle_id")
+	require.Empty(t, mr.HGet(key, "pod_url"),
+		"boot mirror reset must clear stale pod_url")
+	require.Empty(t, mr.HGet(key, "pod_instance_id"),
+		"boot mirror reset must clear stale pod_instance_id")
 }
 
 // ===========================================================================

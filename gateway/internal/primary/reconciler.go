@@ -122,6 +122,19 @@ func (r *Reconciler) Start(ctx context.Context) {
 		log.Error("primary recover-open-lifecycle failed", "err", err)
 	}
 
+	// UAT 14 follow-up (2026-05-19): when recovery completes with FSM
+	// still at StateAsleep (no live lifecycle, or orphan closed), reset
+	// the gw:primary:state Redis mirror so a stale snapshot from before
+	// the restart (e.g. state=draining) does not linger. FSM transitions
+	// during normal operation are mirrored via the onChange callback in
+	// main.go; a no-transition boot needs an explicit fresh write.
+	if r.deps.Redis != nil && r.deps.FSM != nil && r.deps.FSM.State() == StateAsleep {
+		if err := redisx.WritePrimaryState(ctx, r.deps.Redis,
+			StateAsleep.String(), "", "", "", time.Now().Unix()); err != nil {
+			log.Warn("primary boot mirror reset failed", "err", err)
+		}
+	}
+
 	go r.runEventSubscriber(ctx, log)
 	go r.runScheduleLoop(ctx, log)
 }
@@ -187,12 +200,13 @@ func (r *Reconciler) runScheduleLoop(ctx context.Context, log *slog.Logger) {
 				lastExtend = now.Unix()
 			}
 
-			// Reviews #2: schedule-tick gate. DISABLED skips evaluateTick
-			// but the event subscriber goroutine keeps running so manual
-			// force-up still works under DISABLED=true.
-			if r.cfg.PrimaryPodScheduleDisabled {
-				continue
-			}
+			// Reviews #2 + UAT 14 follow-up (2026-05-19): DISABLED is now
+			// gated at the per-evaluator level (evaluateAsleep + evaluateReady)
+			// — NOT here. evaluateDraining + evaluateDestroying MUST keep
+			// advancing under DISABLED so an operator force-down completes
+			// instead of freezing the FSM in StateDraining forever. The
+			// event subscriber goroutine still runs to honor manual
+			// force-up/force-down events under DISABLED=true.
 			r.evaluateTick(ctx, now, log)
 		}
 	}
@@ -371,7 +385,16 @@ func (r *Reconciler) cooldownElapsed(now time.Time) bool {
 // EXIT, not at the pre-warm-fall (pre-warm is asymmetric: only kicks in
 // before UpHour; AFTER DownHour the schedule is OFF and ShouldBeProvisioned
 // would also report false, but using IsInPeak makes intent clearer).
+//
+// UAT 14 follow-up (2026-05-19): DISABLED gates auto-drain. ScheduleRule's
+// IsInPeak returns false under Disabled, which would drain a Ready pod
+// brought up by operator force-up under the soak gate. Return early to
+// preserve operator intent — only operator force-down should drain a
+// force-up pod under DISABLED.
 func (r *Reconciler) evaluateReady(ctx context.Context, now time.Time, log *slog.Logger) {
+	if r.cfg.PrimaryPodScheduleDisabled {
+		return
+	}
 	if !r.rule.IsInPeak(now) {
 		r.startDrain(ctx, "schedule_window_exited", log)
 		return
