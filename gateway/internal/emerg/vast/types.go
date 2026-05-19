@@ -190,7 +190,7 @@ type SearchFilter map[string]any
 
 // DefaultSearchFilter returns the canonical Phase 6 filter per CONTEXT.md
 // D-A2: ≥0.99 reliability, ≤cap dph_total, ≥500 Mbps inet_down,
-// ≥12.6 cuda_max_good, driver ≥570, ordered by dph_total ascending limit 20.
+// ≥12.8 cuda_max_good, driver ≥570, ordered by dph_total ascending limit 20.
 //
 // `gpuName` is the gpu_name eq filter — emerg pods default to "RTX 4090"
 // (cheap fallback for the LLM-only emerg path); primary pods default to
@@ -206,6 +206,16 @@ type SearchFilter map[string]any
 // as MAJOR*1000000 + MINOR*1000 + PATCH (e.g. 570.86.16 → 570086016);
 // `gte: 570000000` excludes any driver below 570.0.0.
 //
+// CUDA gate (UAT 18 2026-05-19): bumped 12.6 → 12.8 because Vast's
+// `cuda_max_good gte 12.6` filter has a regression specifically on
+// RTX 5090 queries that returns zero offers despite EU 5090s reporting
+// cuda_max_good=12.7/13.0/13.1/13.2 in the unfiltered listing.
+// `gte 12.8` returns the expected 4 EU Spain offers (~$2.00/h, host
+// 309734 driver 590.48.01 cuda 13.1). 12.8 also matches the b9191
+// image's actual CUDA runtime requirement, so this is a tightening,
+// not a workaround. RTX 4090 queries unaffected — `gte 12.4/12.6/13`
+// all return 5 offers.
+//
 // `primaryHostID` excludes the primary's host when known (>0); pass 0 to
 // disable the host_id filter when the primary host is unknown (D-A2).
 func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string) SearchFilter {
@@ -215,7 +225,7 @@ func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string) Se
 		"reliability":   map[string]any{"gte": 0.99},
 		"dph_total":     map[string]any{"lte": maxDPH},
 		"inet_down":     map[string]any{"gte": 500},
-		"cuda_max_good": map[string]any{"gte": 12.6},
+		"cuda_max_good": map[string]any{"gte": 12.8},
 		"driver_vers":   map[string]any{"gte": 570000000},
 		"rentable":      map[string]any{"eq": true},
 		"verified":      map[string]any{"eq": true},
