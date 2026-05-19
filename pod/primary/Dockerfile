@@ -80,7 +80,7 @@ RUN python3 -m venv /opt/speaches-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
     && /opt/infinity-venv/bin/pip install --no-cache-dir \
-         "optimum<2.0" "transformers<4.49"
+         "optimum<2.0" "transformers<4.49" "click<8.2"
 
 # Pre-create the realtime-console stub directory speaches 0.9.0rc3 mounts
 # at /v1/realtime via StaticFiles(directory="realtime-console/dist",
