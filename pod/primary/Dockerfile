@@ -70,12 +70,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    factory crashed with
 #    `ChatInterface.__init__() got an unexpected keyword argument 'type'`
 #    on attempt 12. Pinning gradio<6.0 keeps the speaches UI factory happy.
+#  - faster-whisper<1.1 — UAT 15 (2026-05-19) caught transcription crash:
+#    `onnxruntime.NoSuchFile: silero_encoder_v5.onnx`. faster-whisper 1.1.x
+#    ships only `silero_vad_v6.onnx` (combined V6 VAD); speaches 0.9.0rc3
+#    code path loads the V5 encoder/decoder split. Pin <1.1 so the v5
+#    assets (silero_encoder_v5.onnx + silero_decoder_v5.onnx) ship in
+#    /opt/speaches-venv/lib/python3.12/site-packages/faster_whisper/assets/.
 RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
          "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
-         "onnx-asr<0.10.0" "gradio<6.0" \
+         "onnx-asr<0.10.0" "gradio<6.0" "faster-whisper<1.1" \
     && python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
