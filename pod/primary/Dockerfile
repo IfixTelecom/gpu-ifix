@@ -93,7 +93,8 @@ RUN python3 -m venv /opt/speaches-venv \
 # realtime console — gateway routes only /v1/audio/transcriptions to STT.
 RUN mkdir -p /opt/speaches-data/realtime-console/dist \
     && echo '<!DOCTYPE html><html><body>realtime-console stub (not served)</body></html>' \
-       > /opt/speaches-data/realtime-console/dist/index.html
+       > /opt/speaches-data/realtime-console/dist/index.html \
+    && echo '{}' > /opt/speaches-data/model_aliases.json
 
 # Copy dcgm-exporter binary AND the libdcgm.so.4 family + metric configs
 # from stage 1. The distroless dcgm-exporter image bundles libdcgm under
