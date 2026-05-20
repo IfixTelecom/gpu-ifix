@@ -493,8 +493,9 @@ func repoRoot(t *testing.T) string {
 
 // TestSupervisordConf_4ProgramBlocks — Task 1 structural assertion on
 // pod/primary/supervisord.conf: nodaemon=true + exactly 4 [program:*]
-// blocks (llama, speaches, infinity, dcgm) + --jinja flag on llama,
-// no --chat-template-file (B1 embedded LOCKED).
+// blocks (llama, speaches, chatterbox, dcgm) + --jinja flag on llama,
+// no --chat-template-file (B1 embedded LOCKED). Phase 06.7 D-03: infinity
+// embed child removed (relocated to 24/7 CPU host); chatterbox TTS added.
 func TestSupervisordConf_4ProgramBlocks(t *testing.T) {
 	confPath := filepath.Join(repoRoot(t), "pod", "primary", "supervisord.conf")
 	data, err := os.ReadFile(confPath)
@@ -505,7 +506,8 @@ func TestSupervisordConf_4ProgramBlocks(t *testing.T) {
 	require.Contains(t, src, "nodaemon=true", "PID 1 invariant")
 	require.Contains(t, src, "[program:llama]")
 	require.Contains(t, src, "[program:speaches]")
-	require.Contains(t, src, "[program:infinity]")
+	require.Contains(t, src, "[program:chatterbox]", "Phase 06.7 D-05: Chatterbox TTS 5th child (infinity embed removed per D-03)")
+	require.NotContains(t, src, "[program:infinity]", "Phase 06.7 D-03: infinity embed relocated off the pod")
 	require.Contains(t, src, "[program:dcgm]")
 	require.Contains(t, src, "--jinja", "llama command must include --jinja (B1 embedded LOCKED)")
 	require.NotContains(t, src, "--chat-template-file", "B1 embedded LOCKED: no --chat-template-file flag")
