@@ -185,8 +185,8 @@ Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questi
 
 ## Session Continuity
 
-- **Last session:** 2026-05-20T13:26:31.677Z
-- **Next session should:** Discuss + plan + execute Phase 6 (template refactor SEED-001) — unblocks Phase 6.5 HUMAN-UAT. Then `/gsd-autonomous --from 7` to plan+execute Phases 7-10. Phase 6.5 stays at 10/11 pending operator HUMAN-UAT (blocked by Phase 6) — track via Open Todos above, not as an autonomous blocker.
+- **Last session:** 2026-05-20T21:20:02Z
+- **Next session should:** Run the Phase 06.7 live HUMAN-UAT. Plan 06.7-09 Task 1 is DONE (commit `41039b4`: `docs/RUNBOOK-PRIMARY-POD-TTS.md` + `06.7-HUMAN-UAT.md` 6-scenario sheet + CLEANUP). **Task 2 is a BLOCKING human-verify checkpoint** — operator must run S1–S6 + cleanup on a live Vast 5090 (real GPU spend; autonomous mode cannot satisfy it), sign each PASS/FAIL, record spend. After all 6 + cleanup are signed: write `06.7-09-SUMMARY.md` + `06.7-VERIFICATION.md`, then `state advance-plan`. Any FAIL → `/gsd:plan-phase 06.7 --gaps`. Phase 06.7 Plan stays at 9 (06.7-09) — NOT advanced (plan incomplete until UAT signed).
 
 ---
 
