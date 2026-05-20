@@ -12,12 +12,13 @@ import (
 )
 
 const createVoice = `-- name: CreateVoice :one
-INSERT INTO ai_gateway.voices (tenant_id, label, s3_key)
-VALUES ($1, $2, $3)
+INSERT INTO ai_gateway.voices (id, tenant_id, label, s3_key)
+VALUES ($1, $2, $3, $4)
 RETURNING id, tenant_id, label, s3_key, created_at
 `
 
 type CreateVoiceParams struct {
+	ID       uuid.UUID `json:"id"`
 	TenantID uuid.UUID `json:"tenant_id"`
 	Label    string    `json:"label"`
 	S3Key    string    `json:"s3_key"`
@@ -26,8 +27,10 @@ type CreateVoiceParams struct {
 // Insert a catalog row for a newly cloned voice (Plan 07 voicesCreate handler).
 // tenant_id is sourced from the authenticated context (auth.MustFromContext), NEVER
 // from the request body (D-10 / ASVS V4). s3_key is the server-derived MinIO key.
+// id is supplied by the handler so it matches the UUID embedded in s3_key
+// (<prefix>/<id>.wav) — the pod fetches by voice_id, so id and key MUST agree.
 func (q *Queries) CreateVoice(ctx context.Context, arg CreateVoiceParams) (AiGatewayVoice, error) {
-	row := q.db.QueryRow(ctx, createVoice, arg.TenantID, arg.Label, arg.S3Key)
+	row := q.db.QueryRow(ctx, createVoice, arg.ID, arg.TenantID, arg.Label, arg.S3Key)
 	var i AiGatewayVoice
 	err := row.Scan(
 		&i.ID,
