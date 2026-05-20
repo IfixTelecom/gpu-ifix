@@ -240,6 +240,19 @@ func (p *Probe) dispatch(ctx context.Context, u UpstreamConfig) (*http.Response,
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
+	case "tts":
+		// Phase 06.7 (D-12) — synthetic OpenAI /v1/audio/speech probe. The
+		// 4-char "ping" input with response_format=pcm bounds synthesis cost
+		// (T-06.7-04) and voice="random" skips speaker-embedding resolution.
+		// Engine-agnostic: any /v1/audio/speech server (Chatterbox primary or
+		// the Piper tier-1 adapter) returns 200+audio on success; 5xx is a
+		// breaker failure via the shared classification below.
+		body := []byte(`{"model":"tts-1","input":"ping","voice":"random","response_format":"pcm"}`)
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, u.URL+"/v1/audio/speech", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
 	case "stt":
 		buf := &bytes.Buffer{}
 		mw := multipart.NewWriter(buf)

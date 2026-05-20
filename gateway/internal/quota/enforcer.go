@@ -299,6 +299,8 @@ func classifyRoute(path string) RouteClass {
 		return RouteClassEmbed
 	case "/v1/audio/transcriptions":
 		return RouteClassSTT
+	case "/v1/audio/speech":
+		return RouteClassTTS
 	}
 	return RouteClassChat
 }

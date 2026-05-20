@@ -16,6 +16,10 @@ const (
 	RouteClassEmbed RouteClass = "embed"
 	// RouteClassSTT covers /v1/audio/transcriptions and related STT routes.
 	RouteClassSTT RouteClass = "stt"
+	// RouteClassTTS covers /v1/audio/speech (text-to-speech synthesis).
+	// Phase 06.7 (D-12). The wire value "tts" is persisted in Redis keys
+	// (gw:rate:{tenant}:tts:*) and must not change once deployed.
+	RouteClassTTS RouteClass = "tts"
 )
 
 // BucketConfig is the per-tenant + per-route bucket capacity pair. It is

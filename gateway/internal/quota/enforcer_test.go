@@ -158,8 +158,18 @@ var _ = errors.Is
 // "tts" is a wire contract and must not change once deployed.
 //
 // OWNER: Plan 06.7-03 — add RouteClassTTS + classify arm, unskip, and
-// assert classifyRoute("/v1/audio/speech") == quota.RouteClassTTS before
-// that plan is COMPLETE.
+// assert classifyRoute("/v1/audio/speech") == quota.RouteClassTTS.
+//
+// classifyRoute is unexported, so the path->class mapping is asserted in the
+// internal-package test (classify_tts_internal_test.go, package quota). Here
+// in the external test we lock the Redis wire-contract value of the exported
+// RouteClassTTS constant ("tts" must never change once deployed).
 func TestClassifyRoute_TTS(t *testing.T) {
-	t.Skip("OWNER Plan 06.7-03 — add quota.RouteClassTTS (\"tts\") + classifyRoute(\"/v1/audio/speech\")->RouteClassTTS; assert mapping (not RouteClassChat default)")
+	if quota.RouteClassTTS != "tts" {
+		t.Errorf("RouteClassTTS wire value = %q, want \"tts\" (Redis key contract)", quota.RouteClassTTS)
+	}
+	// Distinct from the existing classes so buckets are namespaced apart.
+	if quota.RouteClassTTS == quota.RouteClassChat || quota.RouteClassTTS == quota.RouteClassSTT {
+		t.Errorf("RouteClassTTS must be distinct from Chat/STT classes")
+	}
 }
