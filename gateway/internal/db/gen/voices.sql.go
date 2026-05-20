@@ -27,10 +27,18 @@ type CreateVoiceParams struct {
 // Insert a catalog row for a newly cloned voice (Plan 07 voicesCreate handler).
 // tenant_id is sourced from the authenticated context (auth.MustFromContext), NEVER
 // from the request body (D-10 / ASVS V4). s3_key is the server-derived MinIO key.
-// id is supplied by the handler so it matches the UUID embedded in s3_key
-// (<prefix>/<id>.wav) — the pod fetches by voice_id, so id and key MUST agree.
+// id is supplied by the handler (server-generated UUID) so it MATCHES the UUID
+// embedded in s3_key (<prefix>/<id>.wav) — the pod fetches <prefix>/<voice_id>.wav
+// keyed on this id, so the row id and the S3 object key MUST share the same UUID
+// (Plan 05 zero-shot fetch contract). Generating the id server-side (not via the
+// DB default) is what guarantees that consistency.
 func (q *Queries) CreateVoice(ctx context.Context, arg CreateVoiceParams) (AiGatewayVoice, error) {
-	row := q.db.QueryRow(ctx, createVoice, arg.ID, arg.TenantID, arg.Label, arg.S3Key)
+	row := q.db.QueryRow(ctx, createVoice,
+		arg.ID,
+		arg.TenantID,
+		arg.Label,
+		arg.S3Key,
+	)
 	var i AiGatewayVoice
 	err := row.Scan(
 		&i.ID,
