@@ -99,8 +99,40 @@ RUN python3 -m venv /opt/speaches-venv \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
          "git+https://github.com/speaches-ai/speaches@v0.9.0-rc.3" \
     && /opt/speaches-venv/bin/pip install --no-cache-dir \
-         "onnx-asr<0.10.0" "gradio<6.0" "faster-whisper==1.1.1" \
-    && python3 -m venv /opt/infinity-venv \
+         "onnx-asr<0.10.0" "gradio<6.0" "faster-whisper==1.1.1"
+
+# Chatterbox Multilingual TTS — Phase 06.7 Plan 05 (Wave 1).
+#
+# Isolated /opt/chatterbox-venv per GATE 2: chatterbox-tts==0.1.7 pins
+# torch==2.6.0 (cu124) + transformers==5.2.0, which CANNOT share the
+# speaches/infinity torch stacks (those gate transformers<4.49 for
+# optimum.bettertransformer). A dedicated venv keeps torch 2.6 fully isolated.
+#
+# The cu124 torch trio MUST be version-aligned: a torchvision/torch mismatch
+# breaks the chatterbox import via `torchvision::nms` (GATE 2). Install
+# torch/torchvision/torchaudio together from the cu124 wheel index BEFORE
+# chatterbox-tts so pip does not pull a default-CUDA torch first.
+#
+# Base image llama.cpp:server-cuda-b9191 kept (GATE 2): cu124 wheels work on
+# the pod's 12.x driver — confirmed torch.cuda.is_available()=True on the 4090
+# spike. boto3 is the pinned S3 client the shim uses for the lazy reference-WAV
+# fetch from MinIO (zero-shot voice survival). fastapi+uvicorn serve the shim.
+RUN python3 -m venv /opt/chatterbox-venv \
+    && /opt/chatterbox-venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/chatterbox-venv/bin/pip install --no-cache-dir \
+         --index-url https://download.pytorch.org/whl/cu124 \
+         "torch==2.6.0" "torchvision==0.21.0" "torchaudio==2.6.0" \
+    && /opt/chatterbox-venv/bin/pip install --no-cache-dir \
+         "chatterbox-tts==0.1.7" \
+         "boto3==1.35.99" \
+         "fastapi==0.115.6" "uvicorn==0.34.0"
+
+# Install Infinity into a dedicated venv. Versions track the upstream image
+# tags previously SHA-pinned in Plan 04: Infinity 0.0.77.
+# (Kept for Tier-0 rollback per GATE 4 — embed now relocates off-pod to
+# n8n-ia-vm per D-03; supervisord no longer launches it. Remove this stage in a
+# follow-up once the CPU embed host is confirmed stable.)
+RUN python3 -m venv /opt/infinity-venv \
     && /opt/infinity-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/infinity-venv/bin/pip install --no-cache-dir "infinity-emb[all]==0.0.77" \
     && /opt/infinity-venv/bin/pip install --no-cache-dir \
@@ -154,11 +186,17 @@ RUN ldconfig
 # CONTEXT.md Deferred Ideas as B2 fallback).
 COPY pod/primary/supervisord.conf /etc/supervisor/conf.d/services.conf
 
+# Chatterbox TTS shim served by [program:chatterbox] (uvicorn on :8003,
+# directory=/opt/chatterbox-data). The shim imports torch/chatterbox/torchaudio
+# lazily at model-load time, so it lives standalone here.
+COPY pod/primary/chatterbox_server.py /opt/chatterbox-data/chatterbox_server.py
+
 # Pre-create runtime directories referenced by supervisord.conf + onstart.
 # /weights/* are mount-targets for aria2c-downloaded GGUF/tarball artifacts;
 # /app/templates is the optional B2 Jinja fallback mount target (default
 # empty per WAVE0-GATES Decision 3 B1 embedded).
-RUN mkdir -p /var/log /weights/qwen /weights/whisper /weights/bge-m3 /app/templates
+RUN mkdir -p /var/log /weights/qwen /weights/whisper /weights/bge-m3 /app/templates \
+        /opt/chatterbox-data/models /opt/chatterbox-data/voices
 
 # Disable inherited HEALTHCHECK from llama.cpp base (which curls :8080/health,
 # but our supervisord-managed services bind to :8000/:8001/:8002/:9400 — never
@@ -170,7 +208,7 @@ RUN mkdir -p /var/log /weights/qwen /weights/whisper /weights/bge-m3 /app/templa
 HEALTHCHECK NONE
 
 LABEL org.opencontainers.image.source="https://github.com/IfixTelecom/gpu-ifix"
-LABEL org.opencontainers.image.description="Phase 6.6 primary pod — supervisord + llama.cpp b9191 + speaches + infinity + dcgm"
+LABEL org.opencontainers.image.description="Phase 6.7 primary pod — supervisord + llama.cpp b9191 + speaches + chatterbox-tts + dcgm (embed relocated off-pod per D-03)"
 
 # Override inherited ENTRYPOINT from llama.cpp base (which is `/app/llama-server`)
 # with `/bin/bash` so the supervisord-driven primary pod boots via the bash
