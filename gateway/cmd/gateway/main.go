@@ -78,7 +78,7 @@ type proxies struct {
 	chat            http.Handler
 	embed           http.Handler
 	audio           http.Handler
-	tts             http.Handler // Phase 06.7 — POST /v1/audio/speech (tts dispatcher: tier-0 pod Chatterbox -> tier-1 Piper adapter)
+	tts             http.Handler         // Phase 06.7 — POST /v1/audio/speech (tts dispatcher: tier-0 pod Chatterbox -> tier-1 Piper adapter)
 	voices          *proxy.VoiceHandlers // Phase 06.7 — /v1/audio/voices CRUD (nil disables the routes in the scaffold variant)
 	voicesMaxBytes  int64                // Phase 06.7 — VOICE_MAX_UPLOAD_BYTES cap applied to the upload route
 	auditWriter     *audit.Writer
