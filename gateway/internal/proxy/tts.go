@@ -153,20 +153,26 @@ func (a *piperTTSAdapter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GATE 3 sub-field 3: JSON {input,voice} -> Piper form POST /tts
-	// {text:input, voice:voice}.
-	form := url.Values{}
-	form.Set("text", req.Input)
+	// GATE 3 sub-field 3: OpenAI {input,voice} -> Piper JSON POST /tts
+	// {text:input, voice:voice}. The voice-api Piper server consumes a JSON
+	// body (json.loads); voice is a Piper model filename (unknown/empty falls
+	// back to the default model — the degraded fallback voice), NOT a clone id.
+	piperBody := map[string]string{"text": req.Input}
 	if v := strings.TrimSpace(req.Voice); v != "" {
-		form.Set("voice", v)
+		piperBody["voice"] = v
 	}
-	preq, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
-		a.piperURL+"/tts", strings.NewReader(form.Encode()))
+	piperJSON, err := json.Marshal(piperBody)
 	if err != nil {
 		ErrorHandler("tts_piper", a.log)(w, r, err)
 		return
 	}
-	preq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	preq, err := http.NewRequestWithContext(r.Context(), http.MethodPost,
+		a.piperURL+"/tts", strings.NewReader(string(piperJSON)))
+	if err != nil {
+		ErrorHandler("tts_piper", a.log)(w, r, err)
+		return
+	}
+	preq.Header.Set("Content-Type", "application/json")
 	// X-Request-ID propagation for log correlation (BuildDirector does this
 	// for the tier-0 reverse proxy; replicate it on the adapter path).
 	if rid := httpx.RequestIDFrom(r.Context()); rid != "" {

@@ -125,23 +125,30 @@ func TestTTSProxy_ErrorEnvelope(t *testing.T) {
 
 // TestTTSProxy_PiperFallback_AdapterConverts asserts the GATE 3 Option A
 // gateway adapter (06.7-WAVE0-GATES.md §GATE 3): the adapter translates the
-// OpenAI JSON {input,voice} into Piper's form POST /tts {text,voice}, then
+// OpenAI JSON {input,voice} into Piper JSON POST /tts {text,voice}, then
 // converts Piper's raw mu-law 8kHz response into WAV 16kHz 16-bit PCM mono via
 // the pure-Go mu-law LUT + RIFF writer (NO ffmpeg), setting Content-Type
 // audio/wav. response_format=pcm yields audio/pcm; unsupported -> clean 400.
 func TestTTSProxy_PiperFallback_AdapterConverts(t *testing.T) {
-	// Fake Piper: assert the JSON->form translation, return mu-law 8kHz.
+	// Fake Piper: assert the JSON body translation, return mu-law 8kHz.
 	var gotText, gotVoice string
 	mulawSilence := bytes.Repeat([]byte{0xFF}, 800) // 0xFF mu-law decodes to ~0 (silence)
 	piper := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/tts" {
 			t.Errorf("piper path got %q, want /tts", r.URL.Path)
 		}
-		if err := r.ParseForm(); err != nil {
-			t.Fatalf("parse form: %v", err)
+		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("piper Content-Type got %q, want application/json", ct)
 		}
-		gotText = r.PostFormValue("text")
-		gotVoice = r.PostFormValue("voice")
+		var pb struct {
+			Text  string `json:"text"`
+			Voice string `json:"voice"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&pb); err != nil {
+			t.Fatalf("decode piper json body: %v", err)
+		}
+		gotText = pb.Text
+		gotVoice = pb.Voice
 		w.Header().Set("Content-Type", "audio/basic")
 		_, _ = w.Write(mulawSilence)
 	}))
@@ -168,10 +175,10 @@ func TestTTSProxy_PiperFallback_AdapterConverts(t *testing.T) {
 		t.Errorf("Content-Type got %q, want audio/wav", ct)
 	}
 	if gotText != "Olá mundo" {
-		t.Errorf("JSON->form translation failed: text got %q", gotText)
+		t.Errorf("JSON body translation failed: text got %q", gotText)
 	}
 	if gotVoice != "miro" {
-		t.Errorf("JSON->form translation failed: voice got %q", gotVoice)
+		t.Errorf("JSON body translation failed: voice got %q", gotVoice)
 	}
 	wav, _ := io.ReadAll(resp.Body)
 	assertWAV16kMono(t, wav)
