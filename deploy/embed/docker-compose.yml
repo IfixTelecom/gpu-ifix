@@ -1,0 +1,79 @@
+# deploy/embed/docker-compose.yml — Phase 06.7 Plan 06 (D-03).
+#
+# 24/7 CPU embedding service for the ifix-ai-gateway. Relocates the embed
+# role OFF the GPU primary pod (which sleeps off-peak) onto a static,
+# always-on CPU host so RAG keeps working when the pod is asleep. Wired as
+# the gateway's static tier-0 embed upstream via UPSTREAM_EMBED_URL
+# (seed row `local-embed` in db/migrations/0008_seed_upstreams.sql).
+#
+# Engine: Infinity (michaelf34/infinity), the SAME engine already run as a
+# supervisord child on the primary pod (pod/primary/supervisord.conf
+# [program:infinity], now removed per D-03). Image is SHA-pinned to the
+# digest already vetted in Phase 6.6 (06.6-WAVE0-GATES.md Decision 1,
+# threat T-06.7-SC mitigation).
+#
+# Host (GATE 4): co-located on n8n-ia-vm (10.10.10.20, VMID 101) — NO
+# dedicated VM. ~2-3 GB RAM / ~2-3 GB disk footprint fits the measured
+# 11 GiB available + 28 GB free. Container memory capped at 4 GB so a
+# runaway never starves n8n/rabbit/redis/postgres on the shared host
+# (threat T-06.7-11 — DoS via RAM pressure).
+#
+# Model (GATE 4): intfloat/multilingual-e5-large (1024-dim), ONNX int8 on
+# CPU. mistral-embed (API-only) and jina-v3 (CC-BY-NC) were disqualified
+# under D-02 self-host.
+#
+# PATH NOTE (REVIEWS #5): Infinity natively serves POST /embeddings (NOT
+# /v1/embeddings — verified Phase 6.6 UAT 14 OpenAPI). The gateway's embed
+# proxy preserves the request path 1:1 (gateway/internal/proxy/director.go
+# BuildDirector leaves r.URL.Path unchanged), and its client route is
+# /v1/embeddings. So we run Infinity with `--url-prefix /v1` so it answers
+# /v1/embeddings directly — matching the forwarded path with NO gateway code
+# change. See README.md "Path mismatch resolution".
+#
+# This service does NOT use a GPU device reservation — it is CPU 24/7 (D-03).
+
+services:
+  embed:
+    image: michaelf34/infinity:0.0.77@sha256:11e8b3921b9f1a58965afaad4a844c435c9807cbc82c51e47cb147b7d977fc88
+    container_name: ai-gateway-embed
+    restart: unless-stopped
+    # infinity_emb v2: CPU + ONNX int8 + multilingual-e5-large, served under
+    # /v1 so the gateway's /v1/embeddings route reaches POST /v1/embeddings
+    # 1:1 (see PATH NOTE above). --device cpu forces CPU even on hosts that
+    # expose no GPU; --engine optimum + --dtype int8 selects the ONNX int8
+    # path (smaller RAM, no torch CUDA).
+    command: >
+      v2
+      --model-id intfloat/multilingual-e5-large
+      --served-model-name multilingual-e5-large
+      --engine optimum
+      --device cpu
+      --dtype int8
+      --url-prefix /v1
+      --host 0.0.0.0
+      --port 7997
+    ports:
+      # Published on the host so the gateway (UPSTREAM_EMBED_URL) can reach it
+      # across the internal NAT 10.10.10.0/24. Not exposed publicly
+      # (threat T-06.7-12 — accept: internal-only, gateway is sole consumer).
+      - "7997:7997"
+    environment:
+      # Persist the HuggingFace model cache on the named volume so a restart
+      # never re-downloads the ~600 MB model.
+      - HF_HOME=/app/.cache/huggingface
+      - INFINITY_MODEL_WARMUP=true
+    volumes:
+      - embed-model-cache:/app/.cache/huggingface
+    mem_limit: 4g
+    healthcheck:
+      # Infinity exposes GET /health. With --url-prefix /v1 the health route
+      # is served under the prefix as well.
+      test: ["CMD", "curl", "-fsS", "http://localhost:7997/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+
+volumes:
+  embed-model-cache:
+    name: ai-gateway-embed-model-cache
