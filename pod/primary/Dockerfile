@@ -104,28 +104,32 @@ RUN python3 -m venv /opt/speaches-venv \
 # Chatterbox Multilingual TTS — Phase 06.7 Plan 05 (Wave 1).
 #
 # Isolated /opt/chatterbox-venv per GATE 2: chatterbox-tts==0.1.7 pins
-# torch==2.6.0 (cu124) + transformers==5.2.0, which CANNOT share the
-# speaches/infinity torch stacks (those gate transformers<4.49 for
-# optimum.bettertransformer). A dedicated venv keeps torch 2.6 fully isolated.
+# torch==2.6.0 + transformers==5.2.0, which CANNOT share the speaches/infinity
+# torch stacks (those gate transformers<4.49 for optimum.bettertransformer).
+# A dedicated venv keeps the torch stack fully isolated.
 #
-# The cu124 torch trio MUST be version-aligned: a torchvision/torch mismatch
-# breaks the chatterbox import via `torchvision::nms` (GATE 2). Install
-# torch/torchvision/torchaudio together from the cu124 wheel index BEFORE
-# chatterbox-tts so pip does not pull a default-CUDA torch first.
+# RTX 5090 (Blackwell, sm_120) fix: chatterbox-tts pins torch==2.6.0+cu124, but
+# cu124 ships NO sm_120 kernels — the model load crashes with "no kernel image
+# is available for execution on the device" (the cu124 trio was validated on a
+# 4090/sm_89; Phase 6.6 moved the pod to a 5090). Blackwell support starts at
+# torch 2.7+/cu128. So install chatterbox-tts FIRST (pulls its transformers==5.2.0
+# + the rest), THEN force-reinstall the version-aligned cu128 trio with --no-deps
+# so transformers and everything else stay pinned. The torch/torchvision/torchaudio
+# trio MUST stay version-aligned or the chatterbox import breaks via
+# `torchvision::nms`. pip warns about chatterbox's torch==2.6.0 pin — expected and
+# benign; the 2.6->2.7 inference API chatterbox uses is stable.
 #
-# Base image llama.cpp:server-cuda-b9191 kept (GATE 2): cu124 wheels work on
-# the pod's 12.x driver — confirmed torch.cuda.is_available()=True on the 4090
-# spike. boto3 is the pinned S3 client the shim uses for the lazy reference-WAV
-# fetch from MinIO (zero-shot voice survival). fastapi+uvicorn serve the shim.
+# boto3 is the pinned S3 client the shim uses for the lazy reference-WAV fetch
+# from MinIO (zero-shot voice survival). fastapi+uvicorn serve the shim.
 RUN python3 -m venv /opt/chatterbox-venv \
     && /opt/chatterbox-venv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/chatterbox-venv/bin/pip install --no-cache-dir \
-         --index-url https://download.pytorch.org/whl/cu124 \
-         "torch==2.6.0" "torchvision==0.21.0" "torchaudio==2.6.0" \
-    && /opt/chatterbox-venv/bin/pip install --no-cache-dir \
          "chatterbox-tts==0.1.7" \
          "boto3==1.35.99" \
-         "fastapi==0.115.6" "uvicorn==0.34.0"
+         "fastapi==0.115.6" "uvicorn==0.34.0" \
+    && /opt/chatterbox-venv/bin/pip install --no-cache-dir --force-reinstall --no-deps \
+         --index-url https://download.pytorch.org/whl/cu128 \
+         "torch==2.7.1" "torchvision==0.22.1" "torchaudio==2.7.1"
 
 # Install Infinity into a dedicated venv. Versions track the upstream image
 # tags previously SHA-pinned in Plan 04: Infinity 0.0.77.
