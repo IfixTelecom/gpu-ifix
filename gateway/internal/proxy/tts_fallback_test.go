@@ -10,6 +10,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -51,9 +52,13 @@ func TestIntegration_TTSPiperFallback_AdapterConverts(t *testing.T) {
 		if r.URL.Path != "/tts" {
 			t.Errorf("piper path got %q, want /tts", r.URL.Path)
 		}
-		_ = r.ParseForm()
-		gotText = r.PostFormValue("text")
-		gotVoice = r.PostFormValue("voice")
+		var pb struct {
+			Text  string `json:"text"`
+			Voice string `json:"voice"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&pb)
+		gotText = pb.Text
+		gotVoice = pb.Voice
 		w.Header().Set("Content-Type", "audio/basic")
 		_, _ = w.Write(mulaw)
 	}))
@@ -116,7 +121,7 @@ func TestIntegration_TTSPiperFallback_AdapterConverts(t *testing.T) {
 		t.Fatal("tier-1 Piper adapter never received a request after tier-0 failure")
 	}
 	if gotText != "Olá mundo" || gotVoice != "miro" {
-		t.Errorf("GATE-3 JSON->form translation failed: text=%q voice=%q", gotText, gotVoice)
+		t.Errorf("GATE-3 JSON body translation failed: text=%q voice=%q", gotText, gotVoice)
 	}
 	assertWAV16kMono(t, lastWAV)
 }
