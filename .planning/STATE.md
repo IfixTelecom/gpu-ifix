@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-20T02:38:40.062Z"
+last_updated: "2026-05-20T13:03:17.364Z"
 progress:
   total_phases: 13
   completed_phases: 8
   total_plans: 100
-  completed_plans: 88
+  completed_plans: 90
   percent: 62
 ---
 
@@ -27,8 +27,8 @@ progress:
 
 ## Current Position
 
-Phase: 06.7 (primary-pod-tts-swap-embed-for-kani-tts-2-pt-gpu-move-bge-m3) — NOT PLANNED (inserted 2026-05-19 after Phase 6.6 closeout; urgent — primary pod is peak-only so embed-on-pod breaks RAG off-peak. Swap embed→TTS on GPU + relocate bge-m3 to 24/7 CPU). Phase 6.6 closed PASS (6/6 scenarios, 13/13 plans, 06.6-VERIFICATION.md status=passed). Phase 07 (Observability) deferred behind 06.7.
-Plan: 0 of N (run /gsd:discuss-phase 06.7 then /gsd:plan-phase 06.7).
+Phase: 06.7 (primary-pod-tts-swap-embed-for-kani-tts-2-pt-gpu-move-bge-m3) — EXECUTING
+Plan: 2 of 9
 Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questions in ROADMAP: embed CPU host, TTS server shim vs community wrapper, voice-cloning workflow, tts tier-0 role). Engine decided: Kani-TTS-2-pt (Apache 2.0, PT-BR, 3 GB VRAM, zero-shot voice clone).
 
 - **Phases 1–5:** COMPLETE on disk (all autonomous plans + VERIFICATION). Each carries a `human_needed` / `passed_partial` live-UAT deferral — the standard pattern when the dev stack is not yet deployed:
@@ -178,13 +178,19 @@ Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questi
 |---|-------------|------|--------|-----------|
 | 260515-ayc | Fix STATE.md corruption (heading `## Current Position` duplicado injetado no meio do Phase 6.5 bullet) | 2026-05-15 | f44cf11 | [260515-ayc-fix-state-md-corruption-linha-40-42-tem-](./quick/260515-ayc-fix-state-md-corruption-linha-40-42-tem-/) |
 | 260516-rym | Fix handleForceProvision não trata FSM em cooldown — pod Vast.ai órfão queimava $$ quando operator force-provision após falha. Precheck FSM.State() + SetState(EmergencyProvisioning) em vez de 2x Transition. +2 regression tests. | 2026-05-16 | 5aec0eb | [260516-rym-fix-force-provision-cooldown-transition](./quick/260516-rym-fix-force-provision-cooldown-transition/) |
+| Phase 06.7 P02 | 10m | 2 tasks | 7 files |
 
 ## Session Continuity
 
-- **Last session:** 2026-05-20T02:07:07.502Z
+- **Last session:** 2026-05-20T13:02:16.810Z
 - **Next session should:** Discuss + plan + execute Phase 6 (template refactor SEED-001) — unblocks Phase 6.5 HUMAN-UAT. Then `/gsd-autonomous --from 7` to plan+execute Phases 7-10. Phase 6.5 stays at 10/11 pending operator HUMAN-UAT (blocked by Phase 6) — track via Open Todos above, not as an autonomous blocker.
 
 ---
 
 *State created: 2026-04-17*
 *State repaired against disk: 2026-05-14*
+
+## Decisions
+
+- [Phase 06.7]: Wave 0 test stubs are engine-agnostic on the Go side (assert tts ROLE plumbing — probe path, tier-0 map, route class, re-assert); engine-specific only in the pod pytest (Chatterbox 24kHz, zero-shot audio_prompt_path, no .pt)
+- [Phase 06.7]: Every Wave 0 test stub carries an OWNER annotation + skip reason naming the downstream plan (03/05/07/08) that must unskip + implement it (Codex consensus action #3 — a skipped stub satisfies compile-time scaffolding but does not fail if implementation never happens)
