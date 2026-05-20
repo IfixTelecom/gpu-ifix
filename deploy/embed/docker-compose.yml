@@ -13,14 +13,15 @@
 # threat T-06.7-SC mitigation).
 #
 # Host (GATE 4): co-located on n8n-ia-vm (10.10.10.20, VMID 101) — NO
-# dedicated VM. ~2-3 GB RAM / ~2-3 GB disk footprint fits the measured
-# 11 GiB available + 28 GB free. Container memory capped at 4 GB so a
+# dedicated VM. ONNX fp32 footprint ~2.2 GB model + runtime fits the measured
+# 11 GiB available + 28 GB free. Container memory capped at 6 GB so a
 # runaway never starves n8n/rabbit/redis/postgres on the shared host
 # (threat T-06.7-11 — DoS via RAM pressure).
 #
-# Model (GATE 4): intfloat/multilingual-e5-large (1024-dim), ONNX int8 on
-# CPU. mistral-embed (API-only) and jina-v3 (CC-BY-NC) were disqualified
-# under D-02 self-host.
+# Model (GATE 4): intfloat/multilingual-e5-large (1024-dim), ONNX fp32 on
+# CPU (int8 needs AVX512-VNNI which the i7-8700 host lacks — see DTYPE NOTE).
+# mistral-embed (API-only) and jina-v3 (CC-BY-NC) were disqualified under
+# D-02 self-host.
 #
 # PATH NOTE (REVIEWS #5): Infinity natively serves POST /embeddings (NOT
 # /v1/embeddings — verified Phase 6.6 UAT 14 OpenAPI). The gateway's embed
@@ -37,18 +38,24 @@ services:
     image: michaelf34/infinity:0.0.77@sha256:11e8b3921b9f1a58965afaad4a844c435c9807cbc82c51e47cb147b7d977fc88
     container_name: ai-gateway-embed
     restart: unless-stopped
-    # infinity_emb v2: CPU + ONNX int8 + multilingual-e5-large, served under
+    # infinity_emb v2: CPU + torch fp32 + multilingual-e5-large, served under
     # /v1 so the gateway's /v1/embeddings route reaches POST /v1/embeddings
     # 1:1 (see PATH NOTE above). --device cpu forces CPU even on hosts that
-    # expose no GPU; --engine optimum + --dtype int8 selects the ONNX int8
-    # path (smaller RAM, no torch CUDA).
+    # expose no GPU.
+    # ENGINE NOTE: --engine optimum was REJECTED — Infinity 0.0.77 always picks
+    # the HF repo's pre-quantized `model_qint8_avx512_vnni.onnx`, which REQUIRES
+    # AVX512-VNNI, regardless of --dtype. The host CPU (Intel i7-8700 / Coffee
+    # Lake) has only AVX2 → onnxruntime crashes in a restart loop. `--engine
+    # torch` loads via sentence-transformers/torch (fp32), bypassing the ONNX
+    # variants entirely, and runs on AVX2. ~2.2GB model RAM, slower per request,
+    # but the host has 5+ idle cores and 11Gi free (measured).
     command: >
       v2
       --model-id intfloat/multilingual-e5-large
       --served-model-name multilingual-e5-large
-      --engine optimum
+      --engine torch
       --device cpu
-      --dtype int8
+      --dtype float32
       --url-prefix /v1
       --host 0.0.0.0
       --port 7997
@@ -61,23 +68,29 @@ services:
       # Persist the HuggingFace model cache on the named volume so a restart
       # never re-downloads the ~600 MB model.
       - HF_HOME=/app/.cache/huggingface
-      - INFINITY_MODEL_WARMUP=true
+      # Warmup DISABLED: the timing-benchmark warmup runs all batch sizes and
+      # takes >180s on this CPU (fp32, no AVX512), blocking request serving past
+      # the healthcheck start_period → unhealthy. Disabled so the server accepts
+      # requests right after model load (~30-60s). Warmup only measured batch
+      # timings — not required for correctness.
+      - INFINITY_MODEL_WARMUP=false
     volumes:
       - embed-model-cache:/app/.cache/huggingface
-    mem_limit: 4g
+    mem_limit: 6g
     # CPU cap: n8n-ia-vm has 6 cores at ~15% load (measured 2026-05-20, load
     # avg 0.93). Cap embed at 3 cores so an active embedding burst (e5-large on
     # CPU is multi-core per request) never starves n8n/rabbit/redis/postgres —
     # 3 cores stay reserved for the shared host (threat T-06.7-11, DoS via CPU).
     cpus: 3.0
     healthcheck:
-      # Infinity exposes GET /health. With --url-prefix /v1 the health route
-      # is served under the prefix as well.
-      test: ["CMD", "curl", "-fsS", "http://localhost:7997/v1/health"]
+      # Infinity serves GET /health UNPREFIXED even with --url-prefix /v1
+      # (only the OpenAI routes /v1/models + /v1/embeddings get the prefix —
+      # verified live 2026-05-20: /health=200, /v1/health=404).
+      test: ["CMD", "curl", "-fsS", "http://localhost:7997/health"]
       interval: 30s
       timeout: 5s
-      retries: 3
-      start_period: 180s
+      retries: 5
+      start_period: 240s
 
 volumes:
   embed-model-cache:
