@@ -221,3 +221,13 @@ type AiGatewayUsageCounter struct {
 	// Real BRL cost when upstream was tier-1+. 0 when upstream was tier-0 local.
 	CostExternalBrl pgtype.Numeric `json:"cost_external_brl"`
 }
+
+// Phase 06.7 voice catalog (D-09). One row per cloned voice; reference WAV in MinIO (s3_key). Zero-shot engine (Chatterbox) — no .pt speaker-embedding column.
+type AiGatewayVoice struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	Label    string    `json:"label"`
+	// MinIO object key of the reference WAV. Derived from the server-generated voice UUID, never client input (path-traversal mitigation, Plan 07 / T-06.7-03).
+	S3Key     string    `json:"s3_key"`
+	CreatedAt time.Time `json:"created_at"`
+}

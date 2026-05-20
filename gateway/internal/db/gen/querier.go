@@ -28,6 +28,13 @@ type Querier interface {
 	// this impossible. If COUNT > 0, gateway os.Exit(1).
 	CountSensitivePeakInvariant(ctx context.Context) (int64, error)
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (CreateTenantRow, error)
+	// Insert a catalog row for a newly cloned voice (Plan 07 voicesCreate handler).
+	// tenant_id is sourced from the authenticated context (auth.MustFromContext), NEVER
+	// from the request body (D-10 / ASVS V4). s3_key is the server-derived MinIO key.
+	CreateVoice(ctx context.Context, arg CreateVoiceParams) (AiGatewayVoice, error)
+	// Delete a voice scoped to the caller's tenant (Plan 07 voicesDelete; the handler also
+	// removes the S3 object). tenant_id in the WHERE prevents cross-tenant deletion.
+	DeleteVoiceForTenant(ctx context.Context, arg DeleteVoiceForTenantParams) error
 	ExpireActiveFX(ctx context.Context, currencyPair string) error
 	// Called inside the `gatewayctl prices set` transaction before InsertPrice.
 	// Closes any currently-active row for (model, provider, unit) by setting valid_to=now().
@@ -68,6 +75,9 @@ type Querier interface {
 	// America/Sao_Paulo. Returns zero-value row if no rows exist (caller falls
 	// through to per-tenant default quota).
 	GetUsageCountersToday(ctx context.Context, tenantID uuid.UUID) (GetUsageCountersTodayRow, error)
+	// Fetch a single voice scoped to the caller's tenant. Requires BOTH the voice id AND
+	// tenant_id so a guessed/leaked UUID from another tenant cannot be read (T-06.7-06).
+	GetVoiceForTenant(ctx context.Context, arg GetVoiceForTenantParams) (AiGatewayVoice, error)
 	// key_lookup_hash is the SHA-256 (raw bytes) of the full raw key. Computed by
 	// auth.GenerateAPIKey in 02-03; stored indexed for fast lookup on the hot path
 	// (Codex review [HIGH] 02-03).
@@ -151,6 +161,9 @@ type Querier interface {
 	ListTenants(ctx context.Context) ([]ListTenantsRow, error)
 	// Bulk load at boot + on NOTIFY tenants_changed. Same columns as GetTenantConfig.
 	ListTenantsForLoader(ctx context.Context) ([]ListTenantsForLoaderRow, error)
+	// Tenant-scoped catalog list (Plan 07 voicesList). Filters by tenant_id so a caller
+	// only ever sees its own voices, never cross-tenant (T-06.7-06 Information Disclosure).
+	ListVoicesByTenant(ctx context.Context, tenantID uuid.UUID) ([]AiGatewayVoice, error)
 	// Called when pod /health first returns healthy. Sets first_health_pass_at
 	// (used by D-D4 cost calculation: hours_active = ended_at - first_health_pass_at).
 	// Appends an event to the JSONB timeline.
