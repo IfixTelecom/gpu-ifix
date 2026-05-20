@@ -65,6 +65,11 @@ services:
     volumes:
       - embed-model-cache:/app/.cache/huggingface
     mem_limit: 4g
+    # CPU cap: n8n-ia-vm has 6 cores at ~15% load (measured 2026-05-20, load
+    # avg 0.93). Cap embed at 3 cores so an active embedding burst (e5-large on
+    # CPU is multi-core per request) never starves n8n/rabbit/redis/postgres —
+    # 3 cores stay reserved for the shared host (threat T-06.7-11, DoS via CPU).
+    cpus: 3.0
     healthcheck:
       # Infinity exposes GET /health. With --url-prefix /v1 the health route
       # is served under the prefix as well.
