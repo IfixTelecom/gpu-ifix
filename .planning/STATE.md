@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-last_updated: "2026-05-19T17:55:00Z"
+status: completed
+last_updated: "2026-05-20T01:14:37.468Z"
 progress:
-  total_phases: 12
-  completed_phases: 9
+  total_phases: 13
+  completed_phases: 8
   total_plans: 91
-  completed_plans: 90
-  percent: 99
+  completed_plans: 88
+  percent: 62
 ---
 
 # STATE: ifix-ai-gateway
@@ -27,9 +27,9 @@ progress:
 
 ## Current Position
 
-Phase: 07 (observability-dashboard-alerting) — NOT STARTED (Phase 6.6 closed 2026-05-19 UAT 18: 6/6 scenarios PASS, 13/13 plans GREEN, .planning/phases/06.6-*/06.6-VERIFICATION.md status=passed)
-Plan: 13 of 13 (06.6-VERIFICATION.md written 2026-05-19; Plan 12 cleanup is the only remaining Phase 6.6 task — purely scaffolding cleanup, not blocking Phase 07).
-Next autonomous-eligible work: Phase 07 (Observability Dashboard + Alerting) — discuss + plan + execute. First wave should fix tech debt #4 (chat_completions proxy 503 override-wiring) since the dashboard's tier-0 routing display depends on it.
+Phase: 06.7 (primary-pod-tts-swap-embed-for-kani-tts-2-pt-gpu-move-bge-m3) — NOT PLANNED (inserted 2026-05-19 after Phase 6.6 closeout; urgent — primary pod is peak-only so embed-on-pod breaks RAG off-peak. Swap embed→TTS on GPU + relocate bge-m3 to 24/7 CPU). Phase 6.6 closed PASS (6/6 scenarios, 13/13 plans, 06.6-VERIFICATION.md status=passed). Phase 07 (Observability) deferred behind 06.7.
+Plan: 0 of N (run /gsd:discuss-phase 06.7 then /gsd:plan-phase 06.7).
+Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questions in ROADMAP: embed CPU host, TTS server shim vs community wrapper, voice-cloning workflow, tts tier-0 role). Engine decided: Kani-TTS-2-pt (Apache 2.0, PT-BR, 3 GB VRAM, zero-shot voice clone).
 
 - **Phases 1–5:** COMPLETE on disk (all autonomous plans + VERIFICATION). Each carries a `human_needed` / `passed_partial` live-UAT deferral — the standard pattern when the dev stack is not yet deployed:
   - Phase 1: smoke.yml Vast.ai HUMAN-UAT pending

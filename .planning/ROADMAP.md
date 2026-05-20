@@ -216,6 +216,30 @@ Plans:
 - [x] 06.6-11-PLAN.md — Live Vast.ai UAT (6 scenarios: provision, tool-calling, STT, embed, drain, emerg coexist) + RUNBOOK-PRIMARY-POD.md
 - [ ] 06.6-12-PLAN.md — PR3 cleanup: delete pod/onstart.sh + pod/docker-compose.yml + pod/health-bridge/ + pod/scripts/download-weights.sh; rewrite pod/README.md as redirect
 
+### Phase 06.7: Primary Pod TTS — swap embed for Kani-TTS-2-pt GPU + move bge-m3 to 24/7 CPU (INSERTED)
+
+**Goal:** Add GPU TTS (text-to-speech) to the peak-only primary pod so ConverseAI + voice-api can generate audio with voice cloning, and relocate the bge-m3 embedding service off the primary pod onto a 24/7 CPU host so RAG keeps working off-peak (primary pod sleeps 22h→8h + weekends). Net result: primary pod serves LLM + STT + TTS on GPU; embed runs 24/7 on CPU; voice-api Piper stays as TTS tier-1 fallback.
+
+**Why:** Primary pod is schedule-driven (peak-only, ~308h/mo). Embedding on the primary pod means RAG breaks every off-peak window — unacceptable for 24/7 client RAG. Embed must move to a 24/7 host. Freed VRAM (bge-m3 ~2 GB) plus headroom on the 5090 (32 GB) accommodates a GPU TTS engine for higher-quality, voice-cloned audio during peak hours.
+
+**Engine decision (research 2026-05-19):** Kani-TTS-2-pt (`nineninesix/kani-tts-2-pt`) — Apache 2.0 (commercial OK), native PT-BR, zero-shot voice cloning via speaker embedding, 3 GB VRAM, RTF 0.2 (10s audio in ~2s). Rejected: OpenVoice v2 (no PT-BR), XTTS-v2 (CPML non-commercial grey area post-Coqui-shutdown), F5-TTS (CC-BY-NC), Fish Speech 1.5 (12 GB VRAM min — too heavy).
+
+**Embed cross-model constraint:** bge-m3 (1024-dim) vector space is incompatible with any other embed model. The 24/7 CPU embed MUST use the SAME bge-m3 weights (MinIO `bge-m3/v1.0.0/model.tar.gz`, SHA-pinned) — zero re-embed of the existing RAG corpus. OpenAI text-embedding-3-small tier-1 fallback does NOT work for persistent RAG retrieval (dim + space mismatch); keep it only for ephemeral embed requests.
+
+**Requirements**: refactor + extension only — extends POD-* (primary pod composition) + GW-* (gateway upstream routing). New TTS upstream rows + /v1/audio/speech proxy. Tracked via D-* decisions in 06.7-CONTEXT.md (to be created at discuss-phase).
+**Depends on:** Phase 06.6 (primary pod Strategy B image + supervisord + reconciler tier-0 override mechanism + DCGM)
+**Plans:** 0 plans (run /gsd:discuss-phase 06.7 then /gsd:plan-phase 06.7)
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 06.7 to break down)
+
+Open questions for discuss-phase:
+- Embed CPU 24/7 host: vps-ifix-vm (co-located with gateway/redis/postgres, 24 GB RAM free) vs worker-vm (8 cores, isolated from critical hosts)?
+- TTS server: write a thin FastAPI shim exposing OpenAI-compatible /v1/audio/speech (~150 LoC, we control) vs a community Kani server wrapper?
+- Voice cloning workflow: managed voices via gateway /v1/audio/voices (ref audio persisted to S3, voice_id handle) vs embed ref audio per request?
+- New gateway tier-0 role "tts" added to primary reconciler OverrideTier0 (today: llm/stt/embed → llm/stt/tts; embed becomes a static 24/7 upstream, not a primary-pod override).
+
 ### Phase 6.5: Auto-provisioning Emergency Pod (Vast.ai)
 
 **Goal:** When the primary GPU is gone for minutes, the system stands up an emergency Vast.ai pod, routes to it, and tears it down once primary is stable — with guardrails that prevent runaway cost or duplicated pods.
