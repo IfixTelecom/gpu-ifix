@@ -400,3 +400,38 @@ func TestOverrideTier0_RestoreTier0_AllRoles(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Phase 06.7 Wave 0 RED scaffolding (Nyquist gate). Skip stubs binding the
+// tier-0 "tts" role wiring (D-11) + the new Tier0OverrideURL getter (D-13)
+// to their owning implementation plan. ENGINE-AGNOSTIC — they assert the
+// tier-0 override MAP shape + getter, not Chatterbox internals.
+//
+// OWNER map (authority: 06.7-02-PLAN.md <stub_ownership_map>):
+//   - TestTier0_TTSKeyPresentEmbedAbsent -> Plan 06.7-03
+//   - TestTier0OverrideURL_Getter        -> Plan 06.7-03
+// ---------------------------------------------------------------------------
+
+// TestTier0_TTSKeyPresentEmbedAbsent asserts that after the Phase 06.7
+// engine swap the canonical tier-0 override map (newTier0OverrideMap)
+// contains a "tts" key and DROPS the "embed" key (embed relocates to
+// n8n-ia-vm CPU per D-03/D-11 — it is no longer a primary-pod tier-0 role).
+// The owning plan must change newTier0OverrideMap from {llm,stt,embed} to
+// {llm,stt,tts} and prove OverrideTier0("tts", url) routes while
+// OverrideTier0("embed", url) is a no-op.
+//
+// OWNER: Plan 06.7-03 — unskip + assert real map keys before COMPLETE.
+func TestTier0_TTSKeyPresentEmbedAbsent(t *testing.T) {
+	t.Skip("OWNER Plan 06.7-03 — newTier0OverrideMap must contain \"tts\", lack \"embed\" (D-11); assert OverrideTier0(\"tts\") routes + OverrideTier0(\"embed\") no-ops")
+}
+
+// TestTier0OverrideURL_Getter asserts the new Loader.Tier0OverrideURL(role)
+// (string, bool) getter (D-13): returns (overrideURL, true) when an override
+// is active for the role, (\"\", false) when the role is unknown or no
+// override is set. The primary reconciler's Pitfall #11 re-assert path
+// (Plan 06.7-08) reads this to decide whether the tier-0 slot is empty.
+//
+// OWNER: Plan 06.7-03 — implement Tier0OverrideURL + unskip before COMPLETE.
+func TestTier0OverrideURL_Getter(t *testing.T) {
+	t.Skip("OWNER Plan 06.7-03 — implement Loader.Tier0OverrideURL(role) (string,bool); assert active->(url,true), absent->(\"\",false)")
+}

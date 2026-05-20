@@ -138,3 +138,28 @@ var (
 // Silence unused-import complaints when we fold tests; keep this named
 // dep-compile so refactors that forget a test file still tell us.
 var _ = errors.Is
+
+// ---------------------------------------------------------------------------
+// Phase 06.7 Wave 0 RED scaffolding (Nyquist gate). Skip stub binding the
+// TTS route-class plumbing to its owning implementation plan. ENGINE-AGNOSTIC
+// — it asserts that `/v1/audio/speech` classifies to a TTS rate-limit bucket,
+// regardless of which TTS server runs on the primary pod.
+//
+// OWNER map (authority: 06.7-02-PLAN.md <stub_ownership_map>):
+//   - TestClassifyRoute_TTS -> Plan 06.7-03
+// ---------------------------------------------------------------------------
+
+// TestClassifyRoute_TTS asserts that classifyRoute("/v1/audio/speech")
+// returns the new RouteClassTTS constant (NOT the RouteClassChat default
+// fallback). The owning plan must add the new const RouteClassTTS
+// RouteClass = "tts" in bucket.go and the case "/v1/audio/speech":
+// return RouteClassTTS arm in classifyRoute. Because RouteClass strings are
+// persisted in Redis keys (gw:rate:{tenant}:{class}:*) the chosen value
+// "tts" is a wire contract and must not change once deployed.
+//
+// OWNER: Plan 06.7-03 — add RouteClassTTS + classify arm, unskip, and
+// assert classifyRoute("/v1/audio/speech") == quota.RouteClassTTS before
+// that plan is COMPLETE.
+func TestClassifyRoute_TTS(t *testing.T) {
+	t.Skip("OWNER Plan 06.7-03 — add quota.RouteClassTTS (\"tts\") + classifyRoute(\"/v1/audio/speech\")->RouteClassTTS; assert mapping (not RouteClassChat default)")
+}

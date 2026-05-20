@@ -1465,3 +1465,42 @@ func (r *Reconciler) waitForReadyOrDestroyForTest(ctx context.Context, lifecycle
 // _ = strconv keeps the import alive if a future test wants to parse host
 // port strings (currently HostPort is read as-is into URL builders).
 var _ = strconv.Atoi
+
+// ---------------------------------------------------------------------------
+// Phase 06.7 Wave 0 RED scaffolding (Nyquist gate). Skip stubs binding the
+// primary-pod tier-0 re-assert behavior (Pitfall #11 / D-13) for the swapped
+// TTS role to its owning implementation plan. ENGINE-AGNOSTIC — they assert
+// WHICH roles the reconciler overrides on Ready, not Chatterbox internals.
+//
+// OWNER map (authority: 06.7-02-PLAN.md <stub_ownership_map>):
+//   - TestEvaluateReady_ReassertsTier0WhenCleared -> Plan 06.7-08
+//   - TestMarkReady_OverridesTTSNotEmbed          -> Plan 06.7-08
+// ---------------------------------------------------------------------------
+
+// TestEvaluateReady_ReassertsTier0WhenCleared asserts the Pitfall #11 /
+// D-13 fix: when the primary FSM is in StatePrimaryReady AND the tier-0
+// override slot for a primary role (llm/stt/tts) is empty (e.g. an emerg
+// cutback's RestoreTier0 transitively cleared it), evaluateReady re-calls
+// loader.OverrideTier0(role, podURL) for llm/stt/tts — and explicitly does
+// NOT re-assert "embed" (embed lives on n8n-ia-vm CPU after Phase 06.7, no
+// longer a primary-pod tier-0 role). Uses loader.Tier0OverrideURL(role) to
+// detect the empty slot.
+//
+// OWNER: Plan 06.7-08 — implement the Ready-tick re-assert (read
+// Tier0OverrideURL, re-Override llm/stt/tts when empty), unskip, and assert
+// re-assert fires for llm/stt/tts but never embed before COMPLETE.
+func TestEvaluateReady_ReassertsTier0WhenCleared(t *testing.T) {
+	t.Skip("OWNER Plan 06.7-08 — Pitfall #11/D-13: on Ready-tick re-OverrideTier0(llm/stt/tts) when slot empty; never re-assert embed")
+}
+
+// TestMarkReady_OverridesTTSNotEmbed asserts that when the primary pod
+// reaches StatePrimaryReady, markReady calls loader.OverrideTier0 for "llm",
+// "stt", and "tts" (the swapped role) and does NOT call it for "embed"
+// (relocated off the primary pod per D-11). This replaces the Phase 6.6
+// {llm,stt,embed} override set with the Phase 06.7 {llm,stt,tts} set.
+//
+// OWNER: Plan 06.7-08 — update markReady role set to {llm,stt,tts}, unskip,
+// and assert OverrideTier0 fired for tts + NOT for embed before COMPLETE.
+func TestMarkReady_OverridesTTSNotEmbed(t *testing.T) {
+	t.Skip("OWNER Plan 06.7-08 — markReady must OverrideTier0(llm/stt/tts), NOT embed; assert tts overridden + embed untouched")
+}
