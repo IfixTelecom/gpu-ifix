@@ -236,7 +236,7 @@ func (r *Reconciler) provisionLifecycle(ctx context.Context, id int64) error {
 		return errors.New("emerg: no Vast.ai client wired (VAST_AI_API_KEY missing)")
 	}
 
-	filter := vast.DefaultSearchFilter(r.deps.Cfg.VastPriceCapDPH, r.deps.Cfg.PrimaryHostID, r.deps.Cfg.VastGPUName)
+	filter := vast.DefaultSearchFilter(r.deps.Cfg.VastPriceCapDPH, r.deps.Cfg.PrimaryHostID, r.deps.Cfg.VastGPUName, 1)
 	offers, err := vastClient.SearchOffers(ctx, filter)
 	if err != nil {
 		_ = r.closeLifecycle(ctx, id, "search_failed", 0)

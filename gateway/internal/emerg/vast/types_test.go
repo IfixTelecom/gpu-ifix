@@ -90,3 +90,50 @@ func TestCreateRequest_StrategyB_FullShape(t *testing.T) {
 	require.Contains(t, s, `"image":"ghcr.io/ggml-org/llama.cpp:server-cuda-b9128"`)
 	require.Contains(t, s, `"disk":40`)
 }
+
+// TestDefaultSearchFilter_NumGPUs covers the num_gpus knob (PRIMARY_NUM_GPUS):
+// an explicit count sets num_gpus:{eq:N} (2 for the 2×3090 single-pod topology),
+// and a non-positive value falls back to 1 (preserves single-GPU default).
+func TestDefaultSearchFilter_NumGPUs(t *testing.T) {
+	t.Run("explicit_count", func(t *testing.T) {
+		f := DefaultSearchFilter(1.0, 0, "RTX 3090", 2)
+		ng := f["num_gpus"].(map[string]any)
+		require.Equal(t, 2, ng["eq"], "num_gpus must reflect the requested count")
+	})
+	t.Run("non_positive_falls_back_to_1", func(t *testing.T) {
+		f := DefaultSearchFilter(1.0, 0, "RTX 4090", 0)
+		ng := f["num_gpus"].(map[string]any)
+		require.Equal(t, 1, ng["eq"], "numGPUs<=0 must default to single GPU")
+	})
+}
+
+// TestWithMachineAllowlist covers the PRIMARY_VAST_MACHINE_ALLOWLIST preference
+// pass: a non-empty allowlist sets machine_id:{in:[...]} (overwriting any
+// blocklist notin clause), an empty allowlist is a no-op, and the original
+// filter is not mutated (the reconciler reuses it for the broaden-fallback).
+func TestWithMachineAllowlist(t *testing.T) {
+	t.Run("sets_in_clause_and_overwrites_blocklist", func(t *testing.T) {
+		base := DefaultSearchFilter(1.0, 0, "RTX 3090", 1, 111, 222) // blocklist 111,222
+		out := WithMachineAllowlist(base, []int64{333, 444})
+		mid, ok := out["machine_id"].(map[string]any)
+		require.True(t, ok, "machine_id clause must be present")
+		require.Contains(t, mid, "in", "allowlist must use the `in` clause")
+		require.NotContains(t, mid, "notin", "allowlist overwrites the blocklist `notin`")
+		require.ElementsMatch(t, []any{int64(333), int64(444)}, mid["in"])
+	})
+
+	t.Run("empty_allowlist_is_noop", func(t *testing.T) {
+		base := DefaultSearchFilter(1.0, 0, "RTX 3090", 1, 111)
+		out := WithMachineAllowlist(base, nil)
+		require.Equal(t, base["machine_id"], out["machine_id"],
+			"empty allowlist must leave the blocklist clause untouched")
+	})
+
+	t.Run("does_not_mutate_input", func(t *testing.T) {
+		base := DefaultSearchFilter(1.0, 0, "RTX 3090", 1, 111, 222)
+		_ = WithMachineAllowlist(base, []int64{333})
+		mid := base["machine_id"].(map[string]any)
+		require.Contains(t, mid, "notin",
+			"WithMachineAllowlist must not mutate the input filter (reconciler reuses it for broaden-fallback)")
+	})
+}

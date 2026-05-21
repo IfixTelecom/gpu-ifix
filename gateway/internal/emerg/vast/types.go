@@ -218,15 +218,21 @@ type SearchFilter map[string]any
 //
 // `primaryHostID` excludes the primary's host when known (>0); pass 0 to
 // disable the host_id filter when the primary host is unknown (D-A2).
+// `numGPUs` is the exact GPU count per machine (`num_gpus: {eq: numGPUs}`);
+// values <=0 fall back to 1. Pass 2 for a 2×RTX 3090 single-pod topology
+// (48GB total; llama.cpp auto-tensor-splits Qwen across both GPUs) — emerg
+// passes 1 (LLM-only fallback never needs multi-GPU).
 // machineBlocklist (optional, variadic): machine_ids excluded from the search
 // via `machine_id: {notin: [...]}`. Use to catalog and skip hosts that fail to
 // boot the pod (e.g. multi-GPU machines with broken CDI on non-zero GPU slots,
-// which crash container create with "unresolvable CDI devices gpu=N"). Existing
-// callers (emerg, tests) pass nothing and are unaffected.
-func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string, machineBlocklist ...int64) SearchFilter {
+// which crash container create with "unresolvable CDI devices gpu=N").
+func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string, numGPUs int, machineBlocklist ...int64) SearchFilter {
+	if numGPUs <= 0 {
+		numGPUs = 1
+	}
 	f := SearchFilter{
 		"gpu_name":      map[string]any{"eq": gpuName},
-		"num_gpus":      map[string]any{"eq": 1},
+		"num_gpus":      map[string]any{"eq": numGPUs},
 		"reliability":   map[string]any{"gte": 0.99},
 		"dph_total":     map[string]any{"lte": maxDPH},
 		"inet_down":     map[string]any{"gte": 500},
@@ -247,6 +253,33 @@ func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string, ma
 		f["machine_id"] = map[string]any{"notin": ids}
 	}
 	return f
+}
+
+// WithMachineAllowlist returns a shallow copy of f with the machine_id clause
+// REPLACED by `{in: allowlist}` — restricting the search to the preferred
+// machine_ids only. Used by the primary reconciler's allowlist-first pass
+// (PRIMARY_VAST_MACHINE_ALLOWLIST). Returns f unchanged when allowlist is
+// empty. The `in` clause overwrites any blocklist `notin` clause set by
+// DefaultSearchFilter (an explicit allowlist is the more specific intent;
+// the listed machines are already known-good, so the blocklist is moot).
+//
+// This is a PREFERENCE pass: the reconciler falls back to the unrestricted
+// (blocklist-only) filter when this allowlist-scoped search yields no offers,
+// because Vast is a spot marketplace where the preferred host may be busy.
+func WithMachineAllowlist(f SearchFilter, allowlist []int64) SearchFilter {
+	if len(allowlist) == 0 {
+		return f
+	}
+	out := make(SearchFilter, len(f)+1)
+	for k, v := range f {
+		out[k] = v
+	}
+	ids := make([]any, len(allowlist))
+	for i, id := range allowlist {
+		ids[i] = id
+	}
+	out["machine_id"] = map[string]any{"in": ids}
+	return out
 }
 
 // vastErrorEnvelope captures the variable-shape error body Vast returns

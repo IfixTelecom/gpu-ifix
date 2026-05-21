@@ -766,19 +766,42 @@ func (r *Reconciler) provisionLifecycle(ctx context.Context, lifecycleID int64, 
 		_ = r.closeLifecycle(ctx, lifecycleID, "no_vast_client", 0)
 		return errors.New("primary: no Vast.ai client wired")
 	}
-	filter := vast.DefaultSearchFilter(r.cfg.PrimaryVastPriceCapDPH, r.cfg.PrimaryHostID, r.cfg.PrimaryGPUName, r.cfg.PrimaryVastMachineBlocklist...)
+	filter := vast.DefaultSearchFilter(r.cfg.PrimaryVastPriceCapDPH, r.cfg.PrimaryHostID, r.cfg.PrimaryGPUName, r.cfg.PrimaryNumGPUs, r.cfg.PrimaryVastMachineBlocklist...)
 	// No geolocation restriction (operator decision 2026-05-21): the EU-only
 	// allowlist (added UAT 2026-05-18 to keep MinIO/Hetzner-DE weight transfer
 	// in-continent) left the cheapest qualifying 5090s (e.g. CA/CZ/US at ~$0.32/h
 	// vs ~$2/h EU) unreachable. The inet_down>=500 Mbps gate in DefaultSearchFilter
 	// still guards transfer bandwidth; cross-continent weight fetch fits inside the
 	// 2400s coldstart budget.
-	offers, err := r.deps.Vast.SearchOffers(ctx, filter)
-	if err != nil {
-		_ = r.closeLifecycle(ctx, lifecycleID, "search_failed", 0)
-		return err
+	//
+	// Machine allowlist (PRIMARY_VAST_MACHINE_ALLOWLIST): PREFERENCE pass. When
+	// set, search the preferred known-good hosts first; broaden to the full
+	// qualified search only when they are unavailable. Vast is a spot marketplace
+	// (no reservation), so a hard allowlist would block provisioning whenever the
+	// host is busy — the broaden-fallback keeps cheap-marketplace economics while
+	// still preferring trusted hosts.
+	var pickable []vast.Offer
+	if len(r.cfg.PrimaryVastMachineAllowlist) > 0 {
+		allowFilter := vast.WithMachineAllowlist(filter, r.cfg.PrimaryVastMachineAllowlist)
+		offers, err := r.deps.Vast.SearchOffers(ctx, allowFilter)
+		if err != nil {
+			_ = r.closeLifecycle(ctx, lifecycleID, "search_failed", 0)
+			return err
+		}
+		pickable = vastutil.FilterBelowCap(offers, r.cfg.PrimaryVastPriceCapDPH)
+		if len(pickable) == 0 {
+			log.Info("primary allowlist exhausted; broadening to full qualified search",
+				"allowlist", r.cfg.PrimaryVastMachineAllowlist)
+		}
 	}
-	pickable := vastutil.FilterBelowCap(offers, r.cfg.PrimaryVastPriceCapDPH)
+	if len(pickable) == 0 {
+		offers, err := r.deps.Vast.SearchOffers(ctx, filter)
+		if err != nil {
+			_ = r.closeLifecycle(ctx, lifecycleID, "search_failed", 0)
+			return err
+		}
+		pickable = vastutil.FilterBelowCap(offers, r.cfg.PrimaryVastPriceCapDPH)
+	}
 	if len(pickable) == 0 {
 		_ = r.closeLifecycle(ctx, lifecycleID, "no_offers_below_cap", 0)
 		return errors.New("primary: no offers below cap")

@@ -113,7 +113,7 @@ func TestSearchOffers_HappyPath(t *testing.T) {
 		_, _ = w.Write([]byte(`{"offers":[{"id":35956479,"dph_total":0.336,"gpu_name":"RTX 4090","reliability":0.99,"host_id":120840,"machine_id":29286,"inet_down":5453.6,"cuda_max_good":12.6,"rentable":true,"num_gpus":1}]}`))
 	})
 	c := NewClientWithBaseURL("k", srv.URL)
-	offers, err := c.SearchOffers(context.Background(), DefaultSearchFilter(0.40, 0, "RTX 4090"))
+	offers, err := c.SearchOffers(context.Background(), DefaultSearchFilter(0.40, 0, "RTX 4090", 1))
 	require.NoError(t, err)
 	require.Len(t, offers, 1)
 	require.Equal(t, int64(35956479), offers[0].ID)
@@ -131,7 +131,7 @@ func TestSearchOffers_HappyPath(t *testing.T) {
 // TestSearchOffers_PrimaryHostExcluded — when primaryHostID > 0, filter
 // must include host_id: {neq: primaryHostID}.
 func TestSearchOffers_PrimaryHostExcluded(t *testing.T) {
-	f := DefaultSearchFilter(0.40, 999, "RTX 4090")
+	f := DefaultSearchFilter(0.40, 999, "RTX 4090", 1)
 	hostFilter, ok := f["host_id"].(map[string]any)
 	require.True(t, ok, "host_id filter present when primaryHostID > 0")
 	require.Equal(t, int64(999), hostFilter["neq"])
@@ -139,7 +139,7 @@ func TestSearchOffers_PrimaryHostExcluded(t *testing.T) {
 
 // TestSearchOffers_PrimaryHostUnknown — primaryHostID == 0 omits the filter.
 func TestSearchOffers_PrimaryHostUnknown(t *testing.T) {
-	f := DefaultSearchFilter(0.40, 0, "RTX 4090")
+	f := DefaultSearchFilter(0.40, 0, "RTX 4090", 1)
 	_, ok := f["host_id"]
 	require.False(t, ok, "host_id filter MUST be absent when primaryHostID == 0 (D-A2)")
 }
