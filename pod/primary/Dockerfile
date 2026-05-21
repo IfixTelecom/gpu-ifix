@@ -113,11 +113,15 @@ RUN python3 -m venv /opt/speaches-venv \
 # is available for execution on the device" (the cu124 trio was validated on a
 # 4090/sm_89; Phase 6.6 moved the pod to a 5090). Blackwell support starts at
 # torch 2.7+/cu128. So install chatterbox-tts FIRST (pulls its transformers==5.2.0
-# + the rest), THEN force-reinstall the version-aligned cu128 trio with --no-deps
-# so transformers and everything else stay pinned. The torch/torchvision/torchaudio
-# trio MUST stay version-aligned or the chatterbox import breaks via
-# `torchvision::nms`. pip warns about chatterbox's torch==2.6.0 pin — expected and
-# benign; the 2.6->2.7 inference API chatterbox uses is stable.
+# + the rest), THEN UPGRADE the version-aligned cu128 trio. Do NOT use --no-deps:
+# the cu128 torch wheels need the matching nvidia-cuda-*-cu12 12.8 runtime
+# (esp. nvidia-cuda-cupti-cu12) — skipping deps makes torch fall back to the base
+# image's CUDA 12.6 libcupti, which lacks `cuptiActivityEnableDriverApi` and
+# crashes the import. --index-url cu128 serves torch + the nvidia 12.8 libs;
+# --extra-index-url PyPI serves the pure-python deps (numpy stays <2 per chatterbox).
+# The torch/torchvision/torchaudio trio MUST stay version-aligned or the chatterbox
+# import breaks via `torchvision::nms`. pip warns about chatterbox's torch==2.6.0
+# pin — expected and benign; the 2.6->2.7 inference API chatterbox uses is stable.
 #
 # boto3 is the pinned S3 client the shim uses for the lazy reference-WAV fetch
 # from MinIO (zero-shot voice survival). fastapi+uvicorn serve the shim.
@@ -127,8 +131,9 @@ RUN python3 -m venv /opt/chatterbox-venv \
          "chatterbox-tts==0.1.7" \
          "boto3==1.35.99" \
          "fastapi==0.115.6" "uvicorn==0.34.0" \
-    && /opt/chatterbox-venv/bin/pip install --no-cache-dir --force-reinstall --no-deps \
+    && /opt/chatterbox-venv/bin/pip install --no-cache-dir --upgrade \
          --index-url https://download.pytorch.org/whl/cu128 \
+         --extra-index-url https://pypi.org/simple \
          "torch==2.7.1" "torchvision==0.22.1" "torchaudio==2.7.1"
 
 # Install Infinity into a dedicated venv. Versions track the upstream image
