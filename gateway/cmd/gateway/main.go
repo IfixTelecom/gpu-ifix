@@ -657,6 +657,13 @@ func main() {
 	// fallback is dropped from the map and the dispatcher returns 503 when
 	// tier-0 is OPEN (mirrors the openrouter/openai fallback semantics).
 	ttsRoleProxies := map[string]http.Handler{"local-tts": ttsRP}
+	// D-11/D-13 — when the primary reconciler overrides tts with the live pod
+	// URL, loader.Resolve("tts",0) returns name "emergency_pod_tts". Register a
+	// dynamic proxy under that name whose Director reads the override URL per
+	// request (the pod URL changes per lifecycle). Without this the dispatcher
+	// 503s ("Upstream proxy not registered") on every pod-routed TTS request.
+	ttsRoleProxies["emergency_pod_tts"] = proxy.NewDynamicTTSProxy(
+		func() (string, bool) { return loader.Tier0OverrideURL("tts") }, log)
 	if cfg.UpstreamTTSPiperURL != "" {
 		piperAdapter, perr := proxy.NewPiperTTSAdapter(cfg.UpstreamTTSPiperURL, log)
 		if perr != nil {

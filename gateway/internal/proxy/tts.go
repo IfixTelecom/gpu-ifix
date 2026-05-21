@@ -78,6 +78,38 @@ func NewTTSProxy(upstreamURL string, log *slog.Logger, interceptors ...ProxyResp
 	return rp, nil
 }
 
+// NewDynamicTTSProxy builds the tier-0 TTS proxy for the DYNAMIC primary-pod
+// override (D-11). Unlike NewTTSProxy (static target fixed at boot), its
+// Director reads the live override URL from the loader on every request — the
+// Chatterbox pod's public URL changes per lifecycle, so the dispatcher resolves
+// the tier-0 tts upstream to name "emergency_pod_tts" (loader.Resolve) and
+// dispatchTo looks it up here. overrideURL returns (url, ok); when ok is false
+// (no pod / override cleared) the Director leaves the request host empty so the
+// transport fails fast and ErrorHandler emits an OpenAI-shaped 502.
+func NewDynamicTTSProxy(overrideURL func() (string, bool), log *slog.Logger, interceptors ...ProxyResponseInterceptor) http.Handler {
+	return &httputil.ReverseProxy{
+		Director: func(r *http.Request) {
+			target, ok := overrideURL()
+			if !ok || target == "" {
+				return // empty host → transport error → ErrorHandler 502
+			}
+			u, perr := url.Parse(target)
+			if perr != nil || u.Scheme == "" || u.Host == "" {
+				return
+			}
+			BuildDirector(u)(r)
+		},
+		Transport: &http.Transport{
+			MaxIdleConns:          20,
+			MaxIdleConnsPerHost:   4,
+			IdleConnTimeout:       90 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+		},
+		ErrorHandler:   ErrorHandler("tts", log),
+		ModifyResponse: ComposeInterceptors(interceptors...),
+	}
+}
+
 // ttsSpeechRequest is the subset of the OpenAI POST /v1/audio/speech body the
 // gateway needs to inspect: the synth text (input), the voice id, and the
 // desired response_format. Extra client fields are ignored on the tier-1 Piper
