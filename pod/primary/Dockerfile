@@ -134,7 +134,12 @@ RUN python3 -m venv /opt/chatterbox-venv \
     && /opt/chatterbox-venv/bin/pip install --no-cache-dir --upgrade \
          --index-url https://download.pytorch.org/whl/cu128 \
          --extra-index-url https://pypi.org/simple \
-         "torch==2.7.1" "torchvision==0.22.1" "torchaudio==2.7.1"
+         "torch==2.7.1" "torchvision==0.22.1" "torchaudio==2.7.1" \
+    # resemble-perth (chatterbox watermarker dep) imports `pkg_resources`, which
+    # setuptools 81+ removed. Pin <81 LAST (the torch --upgrade above can pull
+    # setuptools 82) so pkg_resources stays present, else PerthImplicitWatermarker
+    # is None and chatterbox load crashes with "NoneType object is not callable".
+    && /opt/chatterbox-venv/bin/pip install --no-cache-dir "setuptools<81"
 
 # Install Infinity into a dedicated venv. Versions track the upstream image
 # tags previously SHA-pinned in Plan 04: Infinity 0.0.77.
