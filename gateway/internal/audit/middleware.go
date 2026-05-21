@@ -178,8 +178,13 @@ func upstreamForRoute(path string) string {
 // it back during Event construction.
 const UpstreamBlockedSensitive = "blocked_sensitive"
 
+// isAudioRoute reports whether the path is an /v1/audio/* route whose request
+// body must NOT be captured/truncated by the audit middleware. This covers
+// transcriptions (multipart audio in), speech (TTS), and voices (multipart WAV
+// upload). Truncating a multipart body to contentCapBytes corrupts it, breaking
+// ParseMultipartForm on the voices upload (Phase 06.7).
 func isAudioRoute(path string) bool {
-	return strings.HasPrefix(path, "/v1/audio/transcriptions")
+	return strings.HasPrefix(path, "/v1/audio/")
 }
 
 // populateAudioMetadata extracts Whisper metadata from the multipart form
