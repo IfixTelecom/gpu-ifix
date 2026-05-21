@@ -228,7 +228,6 @@ func DefaultSearchFilter(maxDPH float64, primaryHostID int64, gpuName string) Se
 		"cuda_max_good": map[string]any{"gte": 12.8},
 		"driver_vers":   map[string]any{"gte": 570000000},
 		"rentable":      map[string]any{"eq": true},
-		"verified":      map[string]any{"eq": true},
 		"order":         []any{[]any{"dph_total", "asc"}},
 		"limit":         20,
 	}
