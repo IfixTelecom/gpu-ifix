@@ -336,6 +336,121 @@ func TestDispatcher_OverContextCapReturns400(t *testing.T) {
 	}
 }
 
+// TestDispatcher_EmergencyOverride_503WhenProxyMissing locks the
+// regression for tech debt #4 (Phase 06.6) / bug introduced by bda05fb.
+//
+// When loader.OverrideTier0(role, podURL) is active, Loader.Resolve
+// returns the synthetic upstream Name="emergency_pod_<role>". If the
+// dispatcher's Proxies map does not carry that key, dispatchTo falls
+// through the !ok branch and emits 503 "Upstream proxy not registered".
+//
+// This test boots a fixture that intentionally omits emergency_pod_llm
+// from Proxies, activates the override, and asserts the exact envelope.
+// Companion to the happy-path test below; the pair guards against a
+// silent refactor that drops the emergency_pod_<role> registration in
+// cmd/gateway/main.go (the fix shipped in 30f90e7 + 12f7479).
+func TestDispatcher_EmergencyOverride_503WhenProxyMissing(t *testing.T) {
+	f := newDispatcherFixture(t, "llm")
+	defer f.cleanup()
+
+	// Activate the tier-0 override — Loader.Resolve now returns
+	// Name="emergency_pod_llm". Fixture's Proxies map only contains
+	// primary-llm + fallback-llm, so dispatchTo will 503.
+	f.loader.OverrideTier0("llm", "http://fake-pod.invalid:8000")
+
+	rw := httptest.NewRecorder()
+	r := makeRequest(t, `{"model":"qwen","messages":[{"role":"user","content":"ping"}]}`, auth.DataClassNormal)
+	f.mux.ServeHTTP(rw, r)
+
+	if rw.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503; body=%s", rw.Code, rw.Body.String())
+	}
+	if !strings.Contains(rw.Body.String(), "Upstream proxy not registered") {
+		t.Errorf("body missing 'Upstream proxy not registered'; got: %s", rw.Body.String())
+	}
+	if !strings.Contains(rw.Body.String(), "upstream_unavailable") {
+		t.Errorf("body missing code 'upstream_unavailable'; got: %s", rw.Body.String())
+	}
+	// Neither tier-0 nor tier-1 backend should have been hit — the
+	// dispatcher 503'd before any ServeHTTP forward.
+	if atomic.LoadInt64(f.tier0Hits) != 0 {
+		t.Errorf("tier-0 hits = %d, want 0", atomic.LoadInt64(f.tier0Hits))
+	}
+	if atomic.LoadInt64(f.tier1Hits) != 0 {
+		t.Errorf("tier-1 hits = %d, want 0", atomic.LoadInt64(f.tier1Hits))
+	}
+}
+
+// TestDispatcher_EmergencyOverride_200WhenProxyRegistered is the
+// happy-path counterpart: with the override active AND an
+// emergency_pod_llm proxy registered, the dispatcher routes traffic
+// to it (the fix's intended behaviour, shipped in 30f90e7).
+func TestDispatcher_EmergencyOverride_200WhenProxyRegistered(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis: %v", err)
+	}
+	defer mr.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	var emergHits int64
+	emergSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt64(&emergHits, 1)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"upstream":"emergency-pod"}`))
+	}))
+	defer emergSrv.Close()
+
+	t0srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"upstream":"tier-0"}`))
+	}))
+	defer t0srv.Close()
+	t1srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"upstream":"tier-1"}`))
+	}))
+	defer t1srv.Close()
+
+	loader := upstreams.NewLoaderInMemory(
+		upstreams.UpstreamConfig{Name: "primary-llm", Role: "llm", Tier: 0, URL: t0srv.URL, Enabled: true},
+		upstreams.UpstreamConfig{Name: "fallback-llm", Role: "llm", Tier: 1, URL: t1srv.URL, Enabled: true},
+	)
+	bs := breaker.NewSet(rdb, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		breaker.Options{ConsecutiveFailures: 1, Cooldown: 30 * time.Second},
+		loader.Names())
+
+	cfg := DispatcherConfig{
+		Role:    "llm",
+		Loader:  loader,
+		Breaker: bs,
+		Proxies: map[string]http.Handler{
+			"primary-llm":       newPassthroughProxy(t, t0srv.URL),
+			"fallback-llm":      newPassthroughProxy(t, t1srv.URL),
+			"emergency_pod_llm": newPassthroughProxy(t, emergSrv.URL),
+		},
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	disp := NewDispatcher(cfg)
+
+	loader.OverrideTier0("llm", emergSrv.URL)
+
+	rw := httptest.NewRecorder()
+	r := makeRequest(t, `{"model":"qwen","messages":[{"role":"user","content":"ping"}]}`, auth.DataClassNormal)
+	disp.ServeHTTP(rw, r)
+
+	if rw.Code != 200 {
+		t.Errorf("status = %d, want 200; body=%s", rw.Code, rw.Body.String())
+	}
+	if atomic.LoadInt64(&emergHits) != 1 {
+		t.Errorf("emergency-pod hits = %d, want 1", atomic.LoadInt64(&emergHits))
+	}
+	if !strings.Contains(rw.Body.String(), `"emergency-pod"`) {
+		t.Errorf("body should come from emergency-pod backend; got: %s", rw.Body.String())
+	}
+}
+
 // Compile-time assertion: ctx import unused if dispatcher tests above
 // don't use context directly. Pin the import to silence unused-import.
 var _ = context.Background
