@@ -11,4 +11,4 @@ Plans:
 - [x] 06.8-02-PLAN.md — Wave 2: STT live-pod validation gate (rebuild image, spin pod, assert /v1/audio/transcriptions 200, propagate new SHA) — CLAUDE.md anti-blind-commit gate
 - [x] 06.8-03-PLAN.md — Wave 3: Gateway 2×3090 live-UAT (A2 search pre-check + gatewayctl primary force-up + 4-endpoint health + nvidia-smi split) → SEED-002 shape input
 - [x] 06.8-04-PLAN.md — Wave 1: Fallback topology ladder runbook + per-shape env presets (2×3090 → 5090 → Shape C deferred)
-- [ ] 06.8-05-PLAN.md — Wave 4 (gap closure): diagnose + fix the PRIMARY_VAST_MACHINE_ALLOWLIST steering bug (diagnose-first, operator-approval gate, minimal fix + unit test) → re-run 2×3090 force-up UAT targeting 43803 → markReady + STT 200 + nvidia-smi 2-GPU split
+- [x] 06.8-05-PLAN.md — Wave 4 (gap closure): diagnose + fix the PRIMARY_VAST_MACHINE_ALLOWLIST steering bug (diagnose-first, operator-approval gate, minimal fix + unit test) → re-run 2×3090 force-up UAT targeting 43803 → markReady + STT 200 + nvidia-smi 2-GPU split
