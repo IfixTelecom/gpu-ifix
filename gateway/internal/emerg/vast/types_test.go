@@ -136,4 +136,96 @@ func TestWithMachineAllowlist(t *testing.T) {
 		require.Contains(t, mid, "notin",
 			"WithMachineAllowlist must not mutate the input filter (reconciler reuses it for broaden-fallback)")
 	})
+
+	// reconciler_composition_preserves_default_fields pins the EXACT wire shape
+	// the primary reconciler's allowlist-first pass sends to Vast.ai
+	// (reconciler.go L769+L785 — `DefaultSearchFilter(0.60, 0, "RTX 3090", 2,
+	// 55942, 45778)` then `WithMachineAllowlist(filter, []int64{43803})`). The
+	// 06.8-05 diagnosis (.planning/phases/06.8-multi-pod-gpu-topology-sizing-stt-fix/
+	// 06.8-ALLOWLIST-DIAGNOSIS.md §3.1) captured the byte-equivalent JSON the
+	// runtime produces; this test guards against any future refactor silently
+	// dropping a DefaultSearchFilter field from the allowlist branch (which
+	// would re-introduce a steering bug like the deploy-staleness pattern the
+	// diagnosis caught — see also Phase 06.8 Plan 05 Task 2).
+	//
+	// Asserts:
+	//   - machine_id clause is exactly {"in":[allowlist...]} (the `in`
+	//     operator overwrites the DefaultSearchFilter `notin` blocklist).
+	//   - Every OTHER DefaultSearchFilter field survives the composition:
+	//     gpu_name, num_gpus, reliability, dph_total, inet_down,
+	//     cuda_max_good, driver_vers, rentable, order, limit. A composition
+	//     that strips any of these would broaden the search beyond the
+	//     primary's safety envelope.
+	t.Run("reconciler_composition_preserves_default_fields", func(t *testing.T) {
+		// Mirror the exact call the reconciler makes (reconciler.go L769+L785).
+		base := DefaultSearchFilter(0.60, 0, "RTX 3090", 2, 55942, 45778)
+		f := WithMachineAllowlist(base, []int64{43803})
+
+		// machine_id: {"in":[43803]} — overwrites the blocklist {"notin":[55942,45778]}.
+		mid, ok := f["machine_id"].(map[string]any)
+		require.True(t, ok, "machine_id clause must be present after composition")
+		require.Contains(t, mid, "in", "allowlist composition must use the `in` clause")
+		require.NotContains(t, mid, "notin",
+			"`in` must overwrite the blocklist `notin` set by DefaultSearchFilter")
+		require.ElementsMatch(t, []any{int64(43803)}, mid["in"],
+			"machine_id.in must carry exactly the allowlist ids")
+
+		// Every DefaultSearchFilter field must survive the composition.
+		gn, ok := f["gpu_name"].(map[string]any)
+		require.True(t, ok, "gpu_name clause must survive composition")
+		require.Equal(t, "RTX 3090", gn["eq"], "gpu_name.eq must be preserved")
+
+		ng, ok := f["num_gpus"].(map[string]any)
+		require.True(t, ok, "num_gpus clause must survive composition")
+		require.Equal(t, 2, ng["eq"], "num_gpus.eq must be preserved (2 for 2×3090 single-pod)")
+
+		rel, ok := f["reliability"].(map[string]any)
+		require.True(t, ok, "reliability clause must survive composition")
+		require.Equal(t, 0.99, rel["gte"], "reliability.gte must be preserved")
+
+		dph, ok := f["dph_total"].(map[string]any)
+		require.True(t, ok, "dph_total clause must survive composition")
+		require.Equal(t, 0.60, dph["lte"], "dph_total.lte (price cap) must be preserved")
+
+		inet, ok := f["inet_down"].(map[string]any)
+		require.True(t, ok, "inet_down clause must survive composition")
+		require.Equal(t, 500, inet["gte"], "inet_down.gte (Mbps) must be preserved")
+
+		cuda, ok := f["cuda_max_good"].(map[string]any)
+		require.True(t, ok, "cuda_max_good clause must survive composition")
+		require.Equal(t, 12.8, cuda["gte"], "cuda_max_good.gte must be preserved")
+
+		drv, ok := f["driver_vers"].(map[string]any)
+		require.True(t, ok, "driver_vers clause must survive composition")
+		require.Equal(t, 570000000, drv["gte"], "driver_vers.gte (≥570 driver gate) must be preserved")
+
+		rent, ok := f["rentable"].(map[string]any)
+		require.True(t, ok, "rentable clause must survive composition")
+		require.Equal(t, true, rent["eq"], "rentable.eq must be preserved")
+
+		require.Equal(t, []any{[]any{"dph_total", "asc"}}, f["order"],
+			"order (dph_total asc) must be preserved")
+		require.Equal(t, 20, f["limit"], "limit must be preserved")
+
+		// Marshal-roundtrip: confirm the JSON byte shape contains the
+		// allowlist `in` clause AND every DefaultSearchFilter field.
+		// Mirrors the diagnosis-captured wire shape (06.8-ALLOWLIST-DIAGNOSIS.md §3.1).
+		raw, err := json.Marshal(f)
+		require.NoError(t, err)
+		s := string(raw)
+		require.Contains(t, s, `"machine_id":{"in":[43803]}`,
+			"marshaled JSON MUST contain the allowlist `in` clause")
+		require.NotContains(t, s, `"notin"`,
+			"marshaled JSON MUST NOT contain a `notin` clause after allowlist composition")
+		require.Contains(t, s, `"gpu_name":{"eq":"RTX 3090"}`)
+		require.Contains(t, s, `"num_gpus":{"eq":2}`)
+		require.Contains(t, s, `"dph_total":{"lte":0.6}`)
+		require.Contains(t, s, `"reliability":{"gte":0.99}`)
+		require.Contains(t, s, `"inet_down":{"gte":500}`)
+		require.Contains(t, s, `"cuda_max_good":{"gte":12.8}`)
+		require.Contains(t, s, `"driver_vers":{"gte":570000000}`)
+		require.Contains(t, s, `"rentable":{"eq":true}`)
+		require.Contains(t, s, `"order":[["dph_total","asc"]]`)
+		require.Contains(t, s, `"limit":20`)
+	})
 }
