@@ -1,12 +1,33 @@
 ---
 phase: 04-multi-tenant-quotas-billing-schedule-routing
-verified: 2026-04-21T12:50:00Z
-status: human_needed
-score: 5/5 must-haves verified (code+tests); 3/5 LIVE UAT deferred
+verified: 2026-05-23T08:35:00Z
+status: passed_partial
+score: 5/5 must-haves verified (code+tests); SC-1 + SC-4 LIVE PASS 2026-05-23; SC-2 billing_events row inspection deferred (Postgres direct)
 overrides_applied: 0
 re_verification:
-  previous_status: has-findings (code review)
-  previous_score: n/a (pre-verification)
+  previous_status: human_needed
+  previous_score: "5/5 must-haves verified (code+tests); 3/5 LIVE UAT deferred"
+  gaps_closed_2026_05_23:
+    - "SC-1 LIVE rate-limit headers PASS — 10-parallel chat burst against tenant uat02-test (rps=5): 3x HTTP 429 + Retry-After:1; X-RateLimit-Limit-Requests=5 + X-RateLimit-Remaining-Requests decrement chain; Prometheus gateway_rate_limit_rejected_total{tenant=\"uat02-test\",window=\"rps\"}=3 matches exactly. See 04-UAT-2026-05-23.md"
+    - "SC-4 LIVE peak-mode off-hours PASS — tenant set-mode peak --window 20-22 + chat at 08:28 BRT → 503 off_hours_upstream_unavailable + module=SCHEDULE upstream=openrouter-chat decision + module=DISPATCHER fail-fast (covers Scenario 3 edge); flip 24/7 → decision=local. Prometheus gateway_schedule_routing_total{decision=off_hours_external} + {decision=local} both populated"
+  gaps_remaining_after_2026_05_23:
+    - "SC-2 billing_events rows (Scenario 6 from 04-UAT-RESULTS.md) — needs direct psql to bd_ai_gateway on db-grupoifix-do-user-7520351-0.j.db.ondigitalocean.com:25060; MCP postgres-grupo-ifix prompt rejected this session"
+    - "Scenario 4 gatewayctl admin loop + /admin/usage — full admin-key create/list/revoke + prices set-fx + billing reconcile + 401 cycle not executed; operator-curated path"
+    - "Scenario 5 Sentry breadcrumbs — Sentry DSN configured, BeforeSend redaction covered by audit/sentry_redaction_test.go; live UI verification operator-side"
+  previous_gaps:
+    - BL-01 UsageInterceptor wired to flusher + prices + fx + tenants
+    - BL-02 Accountant.Delete called via FinalizeRequest defer
+    - HI-01 Lua token bucket per-dimension disable guards div-by-zero
+    - HI-02 usageJSONBuffer captures non-streaming JSON usage
+    - HI-03 Schedule middleware rejects sensitive+peak at request time
+    - HI-04 obs.RequestsMiddleware mounted FIRST (outermost)
+    - ME-01 cfg.QuotaFailOpen wired through QuotaMiddleware
+    - ME-02 Dead idempotency.IsReplay check removed
+    - ME-03 Accountant.RunReaper goroutine evicts stale slots
+    - ME-04 parseWindowHours rejects zero-duration windows (HH-HH)
+    - ME-05 GatewayPricesMissing counter increments on price miss
+    - ME-06 Bootstrap admin key printed to stderr only (no structured log)
+  regressions: []
   gaps_closed:
     - BL-01 UsageInterceptor wired to flusher + prices + fx + tenants
     - BL-02 Accountant.Delete called via FinalizeRequest defer
