@@ -23,5 +23,14 @@ Plans:
 **Depends on:** Phase 03 (fallback chain code in tree); Phase 06.8 (live primary FSM available for breaker-OPEN testing)
 **Blocks:** Phase 02 SC-5 step 7 chat E2E; Phase 03 SC-1 live UAT; Phase 05 SC-1 full overflow; Phase 07 dashboard accuracy (tier-1 cost rows currently mislabeled when model never rewrote)
 **Mode:** sequential (not MVP)
-**Plans:** TBD (planned via /gsd-plan-phase 06.9)
+**Plans:** 6 plans
 **Cost:** zero Vast spend (testable via existing /opt/ai-gateway-dev/ + live OpenRouter direct); ~2-3h wall
+
+Plans:
+
+- [ ] 06.9-01-PLAN.md — Wave 0: Migration 0026 PK widening (alias, upstream_name) + 3 tier-1 seed rows + sqlc regen + migrate_test.go list update + 03-WAVE0-GATES.md URL convention correction (/api/v1 → /api)
+- [ ] 06.9-02-PLAN.md — Wave 1: Resolver refactor — Refresh consumes UpstreamName column; aliasKey semantics ROLE → NAME; 4 new + 1 renamed unit tests; Handler middleware godoc deprecation
+- [ ] 06.9-03-PLAN.md — Wave 2: 3 Directors (OpenRouter + Whisper-multipart + Embed-refactor) gain (resolver, upstreamName) and rewrite body.model via per-upstream lookup; main.go removes models.Handler wraps + threads resolver+name into each Build*Director
+- [ ] 06.9-04-PLAN.md — Wave 2: Config fail-fast on UPSTREAM_*_URL ending in /v1 + gatewayctl breaker {list,force-open,force-close} + gatewayctl model-alias {list,set,get} CLI subcommands (operator surface for live UAT)
+- [ ] 06.9-05-PLAN.md — Wave 3: Integration tests — body-capturing upstreamMock + 3 model-rewrite tests (OR/Whisper/Embed) + migration 0026 round-trip Up→Down→Up + PROJECT.md tier-1 stack confirmation
+- [ ] 06.9-06-PLAN.md — Wave 5 (autonomous: false): 06.9-HUMAN-UAT.md author + operator-driven S1-S6 live UAT on dev stack (~$0.05 spend, no Vast/GPU) + cascade close Phase 02/03/05 VERIFICATION.md (3 small commits) + write 06.9-VERIFICATION.md
