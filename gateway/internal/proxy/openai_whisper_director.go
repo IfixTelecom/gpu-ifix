@@ -12,7 +12,7 @@
 //     file part is preserved byte-identical.
 //
 //   - Duplicate "model" form field: helper returns statusCode=400 + nil body.
-//     The whisperAbortGuard wrapper (registered at the handler chain in
+//     The WhisperAbortGuard wrapper (registered at the handler chain in
 //     main.go) writes HTTP 400 + a JSON error envelope and returns BEFORE
 //     invoking the proxy. The request never reaches upstream.
 //
@@ -77,7 +77,7 @@ var canonicalAliasForUpstream = map[string]string{
 //
 // Non-multipart Content-Type: body passes through untouched (defensive).
 //
-// Duplicate-model abort: the whisperAbortGuard wrapper (registered in
+// Duplicate-model abort: the WhisperAbortGuard wrapper (registered in
 // main.go around the proxy handler) catches the duplicate-model case
 // BEFORE the proxy runs and returns HTTP 400 to the client. The director
 // would also detect duplicates if reached (statusCode=400 short-circuit
@@ -154,7 +154,7 @@ func BuildOpenAIWhisperDirector(
 //   - (newBody, newCT, 0, nil)     — success.
 //   - (nil,     "",    400, nil)   — duplicate "model" field detected; caller
 //                                     SHOULD abort the request with HTTP 400
-//                                     (whisperAbortGuard does this). The
+//                                     (WhisperAbortGuard does this). The
 //                                     director treats 400 as a defensive no-op.
 //   - (nil,     "",    0, err)     — parse error; caller falls back to forwarding
 //                                     the original body.
@@ -267,7 +267,7 @@ func rewriteMultipartModelViaResolver(
 	return out.Bytes(), w.FormDataContentType(), 0, nil
 }
 
-// whisperAbortGuard wraps the Whisper proxy handler with a pre-flight check
+// WhisperAbortGuard wraps the Whisper proxy handler with a pre-flight check
 // that catches duplicate-"model" multipart requests and returns HTTP 400 to
 // the client BEFORE the proxy runs. WARNING-3 (Phase 06.9 Plan 03): this is
 // the wired abort path; there is no escape hatch / no degraded fallback.
@@ -287,7 +287,7 @@ func rewriteMultipartModelViaResolver(
 //
 // log is required for the WARN emission; passing nil is permitted but the
 // rejection path will be silent in that case.
-func whisperAbortGuard(inner http.Handler, resolver *models.Resolver, upstreamName string, log *slog.Logger) http.Handler {
+func WhisperAbortGuard(inner http.Handler, resolver *models.Resolver, upstreamName string, log *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ct := r.Header.Get("Content-Type")
 		if !strings.HasPrefix(ct, "multipart/form-data") || r.Body == nil {

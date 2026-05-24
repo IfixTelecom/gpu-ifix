@@ -549,16 +549,24 @@ func main() {
 	// interceptor (Phase 3 RES-06 / SC-4), AND the UsageInterceptor
 	// (Phase 4 billing capture). Embeddings + audio never stream so their
 	// non-SSE bodies are captured by audit.Middleware directly.
+	// Phase 06.9 R4: local-tier proxies pass-through — body.model forwarded
+	// as-is; Plan 01 seeded identity rows (qwen,llm,qwen,local-llm) provide
+	// alias→target mapping for any future resolver consumption. NewChatProxy /
+	// NewEmbeddingsProxy / NewAudioProxy do NOT call the resolver and do NOT
+	// touch body.model — the alias the client sent is what the local pod
+	// receives. Validated by Plan 05b byte-identical regression tests.
 	chatRP, err := proxy.NewChatProxy(cfg.UpstreamLLMURL, log, auditInterceptor, toolCallInterceptor, usageInterceptor)
 	if err != nil {
 		log.Error("build chat proxy", "err", err)
 		os.Exit(2)
 	}
+	// Phase 06.9 R4: local-tier proxies pass-through — see comment above.
 	embedRP, err := proxy.NewEmbeddingsProxy(cfg.UpstreamEmbedURL, log)
 	if err != nil {
 		log.Error("build embeddings proxy", "err", err)
 		os.Exit(2)
 	}
+	// Phase 06.9 R4: local-tier proxies pass-through — see comment above.
 	audioRP, err := proxy.NewAudioProxy(cfg.UpstreamSTTURL, log)
 	if err != nil {
 		log.Error("build audio proxy", "err", err)
@@ -631,7 +639,7 @@ func main() {
 		// streaming usage chunks (Pitfall 5 — include_usage=true injected
 		// by the director) are captured for cost attribution.
 		orChatProxy, perr := buildOpenRouterChatProxy(u, cfg, log,
-			auditInterceptor, toolCallInterceptor, usageInterceptor)
+			auditInterceptor, toolCallInterceptor, usageInterceptor, resolver)
 		if perr != nil {
 			log.Warn("build openrouter-chat proxy", "err", perr)
 		} else {
@@ -642,7 +650,7 @@ func main() {
 	}
 	embedRoleProxies := map[string]http.Handler{"local-embed": embedRP}
 	if u, ok := loader.Get("openai-embed"); ok && u.URL != "" {
-		oaEmbedProxy, perr := buildOpenAIEmbedProxy(u, log)
+		oaEmbedProxy, perr := buildOpenAIEmbedProxy(u, log, resolver)
 		if perr != nil {
 			log.Warn("build openai-embed proxy", "err", perr)
 		} else {
@@ -659,11 +667,17 @@ func main() {
 			log),
 	}
 	if u, ok := loader.Get("openai-whisper"); ok && u.URL != "" {
-		oaWhisperProxy, perr := buildOpenAIWhisperProxy(u, log)
+		oaWhisperProxy, perr := buildOpenAIWhisperProxy(u, log, resolver)
 		if perr != nil {
 			log.Warn("build openai-whisper proxy", "err", perr)
 		} else {
-			sttRoleProxies["openai-whisper"] = oaWhisperProxy
+			// Phase 06.9 WARNING-3: wrap the Whisper proxy in WhisperAbortGuard
+			// so duplicate-"model" multipart requests are rejected with HTTP 400
+			// BEFORE the proxy runs (no escape hatch / no degraded fallback).
+			// Mirrors the ToolCallTerminalGuard wrapping pattern at line 619.
+			sttRoleProxies["openai-whisper"] = proxy.WhisperAbortGuard(
+				oaWhisperProxy, resolver, "openai-whisper", log,
+			)
 		}
 	}
 	// Phase 06.7 — tts role proxies. tier-0 (local-tts) = the JSON->binary
@@ -1205,17 +1219,15 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 			}, log))
 		}
 
-		// Wrap chat + embed with model rewrite when a resolver is present.
+		// Phase 06.9: removed — per-upstream model rewrite now lives inside
+		// each tier-1 Director (proxy/{openrouter,openai_whisper,openai_embed}
+		// _director.go). The pre-06.9 models.Handler wraps ran at request edge
+		// BEFORE dispatcher resolution, which collapsed all per-upstream
+		// targets onto a single rewrite — incompatible with the per-upstream
+		// resolver introduced in Plan 02. Directors call resolver.Resolve
+		// AFTER dispatch with the compile-time-known upstream name.
 		chatHandler := px.chat
 		embedHandler := px.embed
-		if px.resolver != nil {
-			if chatHandler != nil {
-				chatHandler = models.Handler(px.resolver, "llm", chatHandler)
-			}
-			if embedHandler != nil {
-				embedHandler = models.Handler(px.resolver, "embed", embedHandler)
-			}
-		}
 		// Idempotency middleware (Plan 02-06) wraps ONLY chat (D-C4 — not
 		// embeddings, not audio). Runs AFTER auth + audit (needs tenant_id
 		// scope, type-asserts the audit writer for the replay flag) and
@@ -1324,7 +1336,8 @@ var (
 func buildOpenRouterChatProxy(u upstreams.UpstreamConfig, cfg config.Config, log *slog.Logger,
 	auditInterceptor *audit.AuditInterceptor,
 	toolCallInterceptor *proxy.ToolCallInterceptor,
-	usageInterceptor *proxy.UsageInterceptor) (*httputil.ReverseProxy, error) {
+	usageInterceptor *proxy.UsageInterceptor,
+	resolver *models.Resolver) (*httputil.ReverseProxy, error) {
 	parsed, err := url.Parse(u.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse openrouter url %q: %w", u.URL, err)
@@ -1333,8 +1346,12 @@ func buildOpenRouterChatProxy(u upstreams.UpstreamConfig, cfg config.Config, log
 		return nil, fmt.Errorf("invalid openrouter url %q (missing scheme or host)", u.URL)
 	}
 	rp := &httputil.ReverseProxy{
+		// Phase 06.9 — pass resolver + "openrouter-chat" name + log so the
+		// director rewrites body.model via per-upstream lookup (env-override-wins
+		// per D-06 inherited transparently from Resolver.Resolve).
 		Director: proxy.BuildOpenRouterDirector(parsed, u.AuthBearer,
-			cfg.UpstreamOpenRouterProviderOrder, cfg.UpstreamOpenRouterAllowFallbacks),
+			cfg.UpstreamOpenRouterProviderOrder, cfg.UpstreamOpenRouterAllowFallbacks,
+			resolver, "openrouter-chat", log),
 		FlushInterval: -1, // SSE streaming
 		Transport: &http.Transport{
 			MaxIdleConns:          50,
@@ -1352,7 +1369,7 @@ func buildOpenRouterChatProxy(u upstreams.UpstreamConfig, cfg config.Config, log
 // director rewrites model="text-embedding-3-small" + dimensions=1024 for
 // BGE-M3 parity. No streaming, no tool-call interceptor (embeddings are
 // always non-streaming JSON).
-func buildOpenAIEmbedProxy(u upstreams.UpstreamConfig, log *slog.Logger) (*httputil.ReverseProxy, error) {
+func buildOpenAIEmbedProxy(u upstreams.UpstreamConfig, log *slog.Logger, resolver *models.Resolver) (*httputil.ReverseProxy, error) {
 	parsed, err := url.Parse(u.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse openai-embed url %q: %w", u.URL, err)
@@ -1361,7 +1378,11 @@ func buildOpenAIEmbedProxy(u upstreams.UpstreamConfig, log *slog.Logger) (*httpu
 		return nil, fmt.Errorf("invalid openai-embed url %q", u.URL)
 	}
 	rp := &httputil.ReverseProxy{
-		Director: proxy.BuildOpenAIEmbedDirector(parsed, u.AuthBearer),
+		// Phase 06.9 — pass resolver + "openai-embed" name + log so the
+		// director rewrites body.model via per-upstream lookup (was hard-coded
+		// "text-embedding-3-small" pre-06.9). dimensions=1024 stays hard-coded
+		// (BGE-M3 parity invariant).
+		Director: proxy.BuildOpenAIEmbedDirector(parsed, u.AuthBearer, resolver, "openai-embed", log),
 		Transport: &http.Transport{
 			MaxIdleConns:          50,
 			MaxIdleConnsPerHost:   10,
@@ -1376,7 +1397,7 @@ func buildOpenAIEmbedProxy(u upstreams.UpstreamConfig, log *slog.Logger) (*httpu
 // buildOpenAIWhisperProxy constructs the openai-whisper fallback proxy.
 // The director leaves the multipart body untouched (boundary preserved);
 // only Authorization is added.
-func buildOpenAIWhisperProxy(u upstreams.UpstreamConfig, log *slog.Logger) (*httputil.ReverseProxy, error) {
+func buildOpenAIWhisperProxy(u upstreams.UpstreamConfig, log *slog.Logger, resolver *models.Resolver) (*httputil.ReverseProxy, error) {
 	parsed, err := url.Parse(u.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse openai-whisper url %q: %w", u.URL, err)
@@ -1385,7 +1406,13 @@ func buildOpenAIWhisperProxy(u upstreams.UpstreamConfig, log *slog.Logger) (*htt
 		return nil, fmt.Errorf("invalid openai-whisper url %q", u.URL)
 	}
 	rp := &httputil.ReverseProxy{
-		Director: proxy.BuildOpenAIWhisperDirector(parsed, u.AuthBearer),
+		// Phase 06.9 — pass resolver + "openai-whisper" name + log so the
+		// director rewrites the multipart "model" form-field via per-upstream
+		// lookup while preserving the audio file part byte-identical (R6).
+		// The WhisperAbortGuard wrapper around this proxy handler (registered
+		// below) catches duplicate-"model" multipart requests and returns
+		// HTTP 400 to the client BEFORE the proxy runs (WARNING-3).
+		Director: proxy.BuildOpenAIWhisperDirector(parsed, u.AuthBearer, resolver, "openai-whisper", log),
 		Transport: &http.Transport{
 			MaxIdleConns:          20,
 			MaxIdleConnsPerHost:   4,

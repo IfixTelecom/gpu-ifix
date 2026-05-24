@@ -292,7 +292,7 @@ func TestOpenAIWhisperDirector_MultipartDuplicateModelRejected(t *testing.T) {
 		{"whisper", "openai-whisper"}: "whisper-1",
 	})
 
-	guard := whisperAbortGuard(innerHandler, resolver, "openai-whisper", discardLogger())
+	guard := WhisperAbortGuard(innerHandler, resolver, "openai-whisper", discardLogger())
 
 	body, ct := buildMultipartBody(t, []string{"whisper", "whisper-large"}, "a.wav", []byte("RIFFAUDIO"))
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/audio/transcriptions", bytes.NewReader(body))
