@@ -37,6 +37,7 @@ Commands:
   thresholds        Phase 5: tune shed thresholds via JSONB merge on upstreams.circuit_config.
   emerg             Phase 6: emergency-pod operator surface (state, force-provision, force-destroy, lifecycles).
   primary           Phase 6.6: primary-pod operator surface (state, force-up, force-down, schedule, lifecycles).
+  breaker           Phase 06.9: operator-driven circuit-breaker control (force-open, force-close, list). TTL mandatory; max 300s. Operator-only access.
   audit             Export audit-log partitions to MinIO cold storage (Plan 02-09).
 
 Use "gatewayctl <command> --help" for subcommand flags.
@@ -81,6 +82,8 @@ func main() {
 		os.Exit(runEmerg(ctx, args, log))
 	case "primary":
 		os.Exit(runPrimary(ctx, args, log))
+	case "breaker":
+		os.Exit(runBreaker(ctx, args, log))
 	case "audit":
 		fmt.Fprintln(os.Stderr, "gatewayctl audit: not yet implemented (Plan 02-09)")
 		os.Exit(1)
