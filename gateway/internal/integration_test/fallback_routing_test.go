@@ -110,6 +110,12 @@ func newClassifyingProxy(t *testing.T, target string, bs *breaker.Set, name stri
 			if herr != nil {
 				return nil, herr
 			}
+			// Propagate Content-Type so upstream sees the request shape the
+			// client sent (required by Plan 05b R4 byte-identical assertions
+			// and consistent with how real Directors forward headers).
+			if ct := r.Header.Get("Content-Type"); ct != "" {
+				req.Header.Set("Content-Type", ct)
+			}
 			res, derr := client.Do(req)
 			if derr != nil {
 				return nil, derr
