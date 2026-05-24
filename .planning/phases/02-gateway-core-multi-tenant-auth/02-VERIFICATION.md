@@ -1,10 +1,18 @@
 ---
 phase: 02-gateway-core-multi-tenant-auth
-verified: 2026-04-18T00:00:00Z
-status: human_needed
-score: 4/5 success criteria auto-verified (SC-5 partially — live deploy is human-verify)
+verified: 2026-05-23T08:35:00Z
+status: passed_partial
+score: 4/5 SC fully PASS; SC-5 deploy-flow re-verified live 2026-05-23 (9/10 checklist PASS, step 7 chat E2E deferred to Phase 03/06.6)
 overrides_applied: 0
-re_verification: null
+re_verification:
+  previous_status: human_needed
+  previous_score: "4/5 auto-PASS; SC-5 partial (live deploy human-verify)"
+  gaps_closed:
+    - "SC-5 live deploy 10-step checklist re-run on 2026-05-23 against ai-gateway-dev (image develop-d689321): steps 1-6 + 8 + 9 (inferred) + 10 PASS; container Up 2h healthy, /health 200, 25 migrations applied (0001..0025), tenant + key CRUD work, unauth 401 OpenAI envelope confirmed, key revoke works. See 02-UAT-2026-05-23.md"
+  gaps_remaining:
+    - "Step 7 chat E2E HTTP 503 — primary FSM=asleep + OpenRouter tier-1 env vars not set in dev. Not a Phase 02 acceptance gap (SC-1 covered by Integration_06_GatewayE2E against fake upstream); fix is operator setting UPSTREAM_LLM_OPENROUTER_URL + AUTH_BEARER in Portainer env, which simultaneously closes Phase 04 SC-2 + Phase 05 SC-1 full overflow"
+    - "Step 9 audit row count via direct psql — MCP postgres-grupo-ifix prompt rejected this session; AuditInterceptor wired confirmed via main.go:160 + Integration_03_AuditWrite covers persistence"
+  regressions: []
 gaps: []
 deferred:
   - truth: "Live VPS deploy (Portainer stack `ai-gateway-dev` reachable; real /health 200; gatewayctl tenant+key in prod DB; end-to-end chat through pod)"

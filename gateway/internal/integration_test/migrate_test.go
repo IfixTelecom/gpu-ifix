@@ -11,8 +11,8 @@ import (
 )
 
 // TestIntegration_01_Migrate verifies the full migration up/down/up cycle
-// and validates seed state (1 tenant, 3 model_aliases, ≥3 audit_log
-// partitions from the migration's DO block + EnsurePartitions).
+// and validates seed state (1 tenant, 6 model_aliases — 3 tier-0 + 3 tier-1
+// after Phase 06.9 migration 0026, ≥3 audit_log partitions).
 func TestIntegration_01_Migrate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -31,8 +31,10 @@ func TestIntegration_01_Migrate(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM ai_gateway.model_aliases").Scan(&aliasCount); err != nil {
 		t.Fatal(err)
 	}
-	if aliasCount != 3 {
-		t.Errorf("model_aliases count got %d want 3", aliasCount)
+	// Phase 06.9 migration 0026 widened model_aliases PK to (alias, upstream_name)
+	// and added 3 tier-1 seed rows alongside the 3 pre-existing tier-0 rows → 6 total.
+	if aliasCount != 6 {
+		t.Errorf("model_aliases count got %d want 6", aliasCount)
 	}
 
 	// Idempotent re-run of Up.

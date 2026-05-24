@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/ifixtelecom/gpu-ifix/gateway/internal/models"
 )
 
 // captureUpstream returns an httptest.Server that records the request
@@ -59,9 +61,13 @@ func applyDirector(t *testing.T, director func(*http.Request), method, path, con
 // `"provider":{"order":["novita"],"allow_fallbacks":false}` (D-C2 +
 // D-C1 amendment per 03-WAVE0-GATES.md — Novita pin, NOT Fireworks).
 func TestOpenRouterDirector_InjectsProvider(t *testing.T) {
+	t.Setenv("UPSTREAM_LLM_OPENROUTER_MODEL", "")
 	srv, _, _ := captureUpstream(t)
 	upstream, _ := url.Parse(srv.URL)
-	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false)
+	resolver := models.NewResolverForTesting(map[[2]string]string{
+		{"qwen", "openrouter-chat"}: "qwen/qwen3.5-27b",
+	})
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
 
 	body := []byte(`{"model":"qwen","messages":[{"role":"user","content":"ping"}]}`)
 	_, patched := applyDirector(t, director, http.MethodPost, "/v1/chat/completions", "application/json", body, nil, nil)
@@ -92,7 +98,8 @@ func TestOpenRouterDirector_InjectsProvider(t *testing.T) {
 func TestOpenRouterDirector_InjectsAuthBearer(t *testing.T) {
 	srv, _, _ := captureUpstream(t)
 	upstream, _ := url.Parse(srv.URL)
-	director := BuildOpenRouterDirector(upstream, "sk-or-v1-abc", []string{"novita"}, false)
+	resolver := models.NewResolverForTesting(nil)
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-abc", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
 
 	body := []byte(`{"model":"qwen","messages":[]}`)
 	req, _ := applyDirector(t, director, http.MethodPost, "/v1/chat/completions", "application/json", body, nil, nil)
@@ -108,7 +115,8 @@ func TestOpenRouterDirector_InjectsAuthBearer(t *testing.T) {
 func TestOpenRouterDirector_StripsClientAuth(t *testing.T) {
 	srv, _, _ := captureUpstream(t)
 	upstream, _ := url.Parse(srv.URL)
-	director := BuildOpenRouterDirector(upstream, "sk-or-v1-bound", []string{"novita"}, false)
+	resolver := models.NewResolverForTesting(nil)
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-bound", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
 
 	body := []byte(`{"model":"qwen"}`)
 	clientHdrs := http.Header{}
@@ -131,7 +139,10 @@ func TestOpenRouterDirector_StripsClientAuth(t *testing.T) {
 func TestOpenRouterDirector_OnlyRewritesChatCompletions(t *testing.T) {
 	srv, _, _ := captureUpstream(t)
 	upstream, _ := url.Parse(srv.URL)
-	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false)
+	resolver := models.NewResolverForTesting(map[[2]string]string{
+		{"qwen", "openrouter-chat"}: "qwen/qwen3.5-27b",
+	})
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
 
 	body := []byte(`{"input":"hello","model":"text-embedding-3-small"}`)
 	_, out := applyDirector(t, director, http.MethodPost, "/v1/embeddings", "application/json", body, nil, nil)
@@ -149,11 +160,120 @@ func TestOpenRouterDirector_OnlyRewritesChatCompletions(t *testing.T) {
 func TestOpenRouterDirector_NoBearerSkipsHeader(t *testing.T) {
 	srv, _, _ := captureUpstream(t)
 	upstream, _ := url.Parse(srv.URL)
-	director := BuildOpenRouterDirector(upstream, "" /* empty bearer */, []string{"novita"}, false)
+	resolver := models.NewResolverForTesting(nil)
+	director := BuildOpenRouterDirector(upstream, "" /* empty bearer */, []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
 
 	body := []byte(`{"model":"qwen","messages":[]}`)
 	req, _ := applyDirector(t, director, http.MethodPost, "/v1/chat/completions", "application/json", body, nil, nil)
 	if got := req.Header.Get("Authorization"); got != "" {
 		t.Errorf("Authorization = %q, want empty when bearer is missing", got)
+	}
+}
+
+// --- Phase 06.9 Plan 03 NEW tests ---
+
+// TestOpenRouterDirector_RewritesModelFromResolver — director rewrites
+// the body's "model" field from the alias to the resolver's per-upstream
+// target ("qwen" → "qwen/qwen3.5-27b" for openrouter-chat) AND still
+// injects provider.order on top. Closes OR-FIX requirement at the director
+// layer.
+func TestOpenRouterDirector_RewritesModelFromResolver(t *testing.T) {
+	// Defensive: prevent any host-level env var from interfering with the
+	// schema-only assertion.
+	t.Setenv("UPSTREAM_LLM_OPENROUTER_MODEL", "")
+	srv, _, _ := captureUpstream(t)
+	upstream, _ := url.Parse(srv.URL)
+	resolver := models.NewResolverForTesting(map[[2]string]string{
+		{"qwen", "openrouter-chat"}: "qwen/qwen3.5-27b",
+	})
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
+
+	body := []byte(`{"model":"qwen","messages":[{"role":"user","content":"hi"}]}`)
+	_, patched := applyDirector(t, director, http.MethodPost, "/v1/chat/completions", "application/json", body, nil, nil)
+
+	var m map[string]any
+	if err := json.Unmarshal(patched, &m); err != nil {
+		t.Fatalf("patched body not valid JSON: %v", err)
+	}
+	if got, _ := m["model"].(string); got != "qwen/qwen3.5-27b" {
+		t.Errorf("model = %q, want qwen/qwen3.5-27b (resolver target)", got)
+	}
+	prov, ok := m["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing provider object after rewrite; got body=%s", string(patched))
+	}
+	order, _ := prov["order"].([]any)
+	if len(order) != 1 || order[0] != "novita" {
+		t.Errorf("provider.order = %v, want [\"novita\"] (provider.order injection preserved)", order)
+	}
+	// messages MUST survive across all 3 JSON passes.
+	if _, ok := m["messages"].([]any); !ok {
+		t.Errorf("messages lost across rewrap passes; got body=%s", string(patched))
+	}
+}
+
+// TestOpenRouterDirector_RewriteThenProviderOrderPreservesBoth — same setup
+// as above but explicit assertion that BOTH model rewrite AND provider.order
+// land in the SAME patched body. Catches re-marshal interleaving regressions
+// (e.g., one pass clobbering the previous pass's output).
+func TestOpenRouterDirector_RewriteThenProviderOrderPreservesBoth(t *testing.T) {
+	t.Setenv("UPSTREAM_LLM_OPENROUTER_MODEL", "")
+	srv, _, _ := captureUpstream(t)
+	upstream, _ := url.Parse(srv.URL)
+	resolver := models.NewResolverForTesting(map[[2]string]string{
+		{"qwen", "openrouter-chat"}: "qwen/qwen3.5-27b",
+	})
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
+
+	body := []byte(`{"model":"qwen","messages":[{"role":"user","content":"x"}],"temperature":0.5}`)
+	_, patched := applyDirector(t, director, http.MethodPost, "/v1/chat/completions", "application/json", body, nil, nil)
+
+	var m map[string]any
+	if err := json.Unmarshal(patched, &m); err != nil {
+		t.Fatalf("patched body not valid JSON: %v", err)
+	}
+	// (a) model rewritten
+	if got, _ := m["model"].(string); got != "qwen/qwen3.5-27b" {
+		t.Errorf("model = %q, want qwen/qwen3.5-27b", got)
+	}
+	// (b) provider.order injected
+	prov, ok := m["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider missing; body=%s", string(patched))
+	}
+	order, _ := prov["order"].([]any)
+	if len(order) != 1 || order[0] != "novita" {
+		t.Errorf("provider.order = %v", order)
+	}
+	// (c) temperature preserved
+	if temp, _ := m["temperature"].(float64); temp != 0.5 {
+		t.Errorf("temperature = %v, want 0.5", m["temperature"])
+	}
+}
+
+// TestOpenRouterDirector_NoResolverMatchPassesAliasThrough — resolver has
+// no row for openrouter-chat; alias "qwen" passes through unchanged.
+// Director still injects provider.order (the upstream may still 4xx the
+// unknown model, but breaker classifies 4xx as non-failure per D-A4).
+func TestOpenRouterDirector_NoResolverMatchPassesAliasThrough(t *testing.T) {
+	t.Setenv("UPSTREAM_LLM_OPENROUTER_MODEL", "")
+	srv, _, _ := captureUpstream(t)
+	upstream, _ := url.Parse(srv.URL)
+	resolver := models.NewResolverForTesting(nil) // empty
+	director := BuildOpenRouterDirector(upstream, "sk-or-v1-test", []string{"novita"}, false, resolver, "openrouter-chat", discardLogger())
+
+	body := []byte(`{"model":"qwen","messages":[]}`)
+	_, patched := applyDirector(t, director, http.MethodPost, "/v1/chat/completions", "application/json", body, nil, nil)
+
+	var m map[string]any
+	if err := json.Unmarshal(patched, &m); err != nil {
+		t.Fatalf("patched body not valid JSON: %v", err)
+	}
+	if got, _ := m["model"].(string); got != "qwen" {
+		t.Errorf("model = %q, want qwen (alias unchanged on resolver miss)", got)
+	}
+	// provider.order still injected on top — director is best-effort.
+	if _, ok := m["provider"].(map[string]any); !ok {
+		t.Errorf("provider missing; body=%s", string(patched))
 	}
 }
