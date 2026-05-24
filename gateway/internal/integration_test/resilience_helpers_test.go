@@ -4,6 +4,8 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -20,9 +22,44 @@ import (
 // upstreamMock bundles an httptest.Server with a thread-safe hit counter.
 // All Phase 3 resilience tests reuse this shape so assertions on
 // "tier-1 was/wasn't called" stay readable.
+//
+// Phase 06.9 Plan 05a — extended with body-capture fields for the body-shape
+// assertion tests (the OR-FIX / STT-OAI-FIX / EMBED-OAI-FIX integration
+// suites need to inspect the FORWARDED body to prove the model rewrite,
+// closing the "fake mock returns 200 regardless of body" anti-pattern that
+// hid the OpenRouter 404 bug for months). lastBody / lastCT are populated
+// by newSuccessMockCapturing + newSelectiveMock variants ONLY — the
+// classic newSuccessMock / newFailMock variants leave them empty for
+// backward compatibility.
 type upstreamMock struct {
-	server *httptest.Server
-	hits   *atomic.Int64
+	server   *httptest.Server
+	hits     *atomic.Int64
+	lastBody atomic.Value // []byte — captured forwarded body (capturing variants only)
+	lastCT   atomic.Value // string  — captured forwarded Content-Type
+}
+
+// LastBody returns the most recently captured forwarded request body.
+// Returns nil when no body has been captured (e.g. the classic non-
+// capturing newSuccessMock / newFailMock variants leave this empty).
+// Safe to call concurrently with the server handler.
+func (m *upstreamMock) LastBody() []byte {
+	if v := m.lastBody.Load(); v != nil {
+		if b, ok := v.([]byte); ok {
+			return b
+		}
+	}
+	return nil
+}
+
+// LastContentType returns the most recently captured forwarded Content-Type
+// header value. Returns "" when no request has been captured.
+func (m *upstreamMock) LastContentType() string {
+	if v := m.lastCT.Load(); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 // newSuccessMock returns a 200 OK mock that increments hits on every call.
@@ -37,6 +74,87 @@ func newSuccessMock(t *testing.T) *upstreamMock {
 	}))
 	t.Cleanup(s.Close)
 	return &upstreamMock{server: s, hits: hits}
+}
+
+// newSuccessMockCapturing returns a 200 OK mock that, in addition to
+// counting hits, captures the FORWARDED request body bytes + Content-Type
+// header BEFORE writing the response. Callers assert on the captured body
+// via LastBody() / LastContentType() to prove the gateway forwarded the
+// rewritten model slug (Phase 06.9 OR-FIX / STT-OAI-FIX / EMBED-OAI-FIX
+// closed the "mock returns 200 regardless of body" gap that hid the
+// OpenRouter 404 bug for months).
+//
+// Capture happens BEFORE the response so a synchronous client.Do() return
+// implies the body was captured. Body reads use io.ReadAll which is bounded
+// by Go's http server-side request-body limit; tests should keep bodies small.
+func newSuccessMockCapturing(t *testing.T) *upstreamMock {
+	t.Helper()
+	hits := &atomic.Int64{}
+	mock := &upstreamMock{hits: hits}
+	mock.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		mock.lastBody.Store(body)
+		mock.lastCT.Store(r.Header.Get("Content-Type"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"ok","choices":[{"message":{"content":"pong"}}]}`))
+	}))
+	t.Cleanup(mock.server.Close)
+	return mock
+}
+
+// newSelectiveMock returns a mock that parses the incoming JSON body's
+// "model" field and:
+//   - returns HTTP 200 if the value is present in acceptedModels;
+//   - returns HTTP 404 with an HTML-shaped body if not (mimicking real
+//     OpenRouter's response to an unknown model slug — the exact failure
+//     mode that hid the model-rewrite bug for months).
+//
+// Like newSuccessMockCapturing, the forwarded body bytes + Content-Type
+// are captured BEFORE writing the response so tests can assert what was
+// actually sent regardless of the response code.
+//
+// Plan 05a adds this constructor; Plan 05b is the consumer (R13 historical-
+// bug regression test against the per-upstream-name resolver). The helper
+// lives here so resilience_helpers_test.go is touched exactly once for the
+// Wave 3 split.
+func newSelectiveMock(t *testing.T, acceptedModels []string) *upstreamMock {
+	t.Helper()
+	hits := &atomic.Int64{}
+	mock := &upstreamMock{hits: hits}
+	accepted := make(map[string]struct{}, len(acceptedModels))
+	for _, m := range acceptedModels {
+		accepted[m] = struct{}{}
+	}
+	mock.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		mock.lastBody.Store(body)
+		mock.lastCT.Store(r.Header.Get("Content-Type"))
+		// Try to extract model from JSON body.
+		var m map[string]any
+		_ = json.Unmarshal(body, &m)
+		requestedModel, _ := m["model"].(string)
+		if _, ok := accepted[requestedModel]; ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":      "gen-test",
+				"model":   requestedModel,
+				"choices": []any{},
+			})
+			return
+		}
+		// Mimic real OpenRouter 404 on unknown slug — HTML body, not JSON.
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`<html><body>Not Found</body></html>`))
+	}))
+	t.Cleanup(mock.server.Close)
+	return mock
 }
 
 // newFailMock returns a server that always 500s and counts hits.
