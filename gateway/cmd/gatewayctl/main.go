@@ -38,6 +38,7 @@ Commands:
   emerg             Phase 6: emergency-pod operator surface (state, force-provision, force-destroy, lifecycles).
   primary           Phase 6.6: primary-pod operator surface (state, force-up, force-down, schedule, lifecycles).
   breaker           Phase 06.9: operator-driven circuit-breaker control (force-open, force-close, list). TTL mandatory; max 300s. Operator-only access.
+  model-alias       Phase 06.9: operator CRUD for ai_gateway.model_aliases (list, get, set, delete). Coequal with UPSTREAM_<U>_MODEL env var per D-06.
   audit             Export audit-log partitions to MinIO cold storage (Plan 02-09).
 
 Use "gatewayctl <command> --help" for subcommand flags.
@@ -84,6 +85,8 @@ func main() {
 		os.Exit(runPrimary(ctx, args, log))
 	case "breaker":
 		os.Exit(runBreaker(ctx, args, log))
+	case "model-alias":
+		os.Exit(runModelAlias(ctx, args, log))
 	case "audit":
 		fmt.Fprintln(os.Stderr, "gatewayctl audit: not yet implemented (Plan 02-09)")
 		os.Exit(1)
