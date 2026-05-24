@@ -1,24 +1,43 @@
 ---
 phase: 01-gpu-pod-image-smoke-test
-verified: 2026-04-17T03:00:00Z
-status: human_needed
-score: 3/5 must-haves verified
+verified: 2026-05-24T00:00:00Z
+status: superseded
+score: 3/5 must-haves verified (code); D-19 runtime gates substituted by live UAT 06.6 #18 + 06.7 + 06.8 on Phase 06.8-final hardware (2×RTX 3090 or 5090)
 overrides_applied: 0
+superseded_by:
+  - phase: 06.6
+    artifact: ".planning/phases/06.6-primary-pod-refactor-strategy-b-full-stack-upstream-images-i/06.6-VERIFICATION.md (UAT 18, 6/6 PASS on 5090 EU $0.77/h)"
+    why: "06.6 ships the custom primary-pod image (supervisord 4 children llm+stt+embed+dcgm) that replaced the Phase 1 ifix-ai-pod 3-server design. UAT 18 proved cold-start, 4-of-4 endpoint health, DCGM VRAM scrape, transcription end-to-end, tool-call patched template — all D-19 equivalents on prod-realistic hardware."
+  - phase: 06.7
+    artifact: ".planning/phases/06.7-.../06.7-VERIFICATION.md (5/6 PASS + CLEANUP on 5090)"
+    why: "06.7 added Chatterbox TTS:8003 to the pod (4th GPU child) and moved embed off-pod to CPU. UAT validated full new stack + voice-clone zero-shot + pod-replacement survival via S3 WAV refetch."
+  - phase: 06.8
+    artifact: ".planning/phases/06.8-.../06.8-VERIFICATION.md + 06.8-GW-2GPU-LIVE-UAT.md"
+    why: "06.8 locked the final primary GPU shape (2×RTX 3090 single-pod, allowlist 43803/55158, cap $0.60/h). The Phase 1 single-4090 24 GB target was OBSOLETED — full stack (Qwen Q4 16 GB + Whisper GPU 3 GB + Chatterbox 4 GB + KV 2-3 GB ≈ 25 GB) does NOT fit on 4090, confirmed CUDA OOM in UAT 06.6 #16. 2×3090 (48 GB pooled) is the standing primary shape; 5090 32 GB validated as alternate."
 human_verification:
-  - test: "docker run the image on a fresh Vast.ai 4090 and wait ≤5 min for all three endpoints to become healthy"
-    expected: "GET :8000/health, :8001/health, :8002/health all return HTTP 200 within 5 minutes of pod creation"
-    why_human: "Requires a real Vast.ai GPU pod. Cold-start timing depends on MinIO download throughput, image pull speed, and GPU driver initialization — none of these can be verified by code inspection alone."
-  - test: "Run the documented smoke-load (pod/smoke/smoke.py --target <vast-ai-ip>) against a live pod and inspect smoke-report.json"
-    expected: "gates.all_passed == true; vram_peak_gb <= 21.0; tool_call_valid == true; errors == []; llm_p95_ttft_ms <= 3000"
-    why_human: "Runtime validation of VRAM ceiling, tool-call correctness with the patched Jinja template, and latency SLO requires a real RTX 4090 with Qwen 3.5 27B loaded. smoke.yml (plan 08) is the documented trigger (workflow_dispatch, D-22)."
+  - test: "Cold-start ≤5min on fresh Vast pod"
+    status: superseded
+    superseded_by: "Phase 06.6 UAT 18 cold-start 9min on 5090 EU (longer than Phase 1's 5min target because pod now downloads ~21 GB of weights for 4 services instead of just LLM+STT+embed — budget was renegotiated as part of Phase 06.6 SC-2 acceptance)"
+  - test: "Smoke-load D-19 gates green (vram_peak_gb ≤21, tool_call_valid, llm_p95_ttft_ms ≤3000)"
+    status: superseded
+    superseded_by: "Phase 06.6 UAT 14/15/18 on 5090: tool-call PASS (system_fingerprint b9191-4f13cb742, finish_reason=tool_calls); llm throughput prompt 162.8 tok/s + predict 47.1 tok/s solo, aggregate 80.8 tok/s N=4 concurrent. VRAM target ≤21 GB is OBSOLETE — Phase 06.8 final shape (2×3090 48 GB or 5090 32 GB) has different budget than Phase 1 4090 24 GB."
 ---
 
-# Phase 1: GPU Pod Image & Smoke-Test Verification Report
+# Phase 1: GPU Pod Image & Smoke-Test Verification Report — SUPERSEDED
 
-**Phase Goal:** Ship a reproducible pre-baked pod image that boots the 3 inference servers on a Vast.ai 4090 in ≤5 min with ≥3 GB VRAM headroom under realistic load.
-**Verified:** 2026-04-17T03:00:00Z
-**Status:** human_needed
-**Re-verification:** No — initial verification
+> **STATUS UPDATE 2026-05-24:** Phase 1 was scoped against the original single-pod 3-server `ifix-ai-pod` image targeted at a single Vast RTX 4090 24 GB. That design was REPLACED by Phase 06.6 (`converseai-primary-pod` custom image, supervisord PID 1 + 4 children + DCGM), extended by Phase 06.7 (TTS Chatterbox on GPU as 5th supervisord child, embed moved off-pod to CPU n8n-ia-vm 24/7), and locked by Phase 06.8 (primary GPU shape = 2×RTX 3090 allowlist 43803/55158 cap $0.60/h; 5090 32 GB validated as alternate). The 4090 24 GB target is OBSOLETE — UAT 06.6 #16 confirmed CUDA OOM when whisper-large-v3 GPU offload is added to the Qwen+bge-m3 stack on a 4090.
+>
+> **Phase 1 D-19 runtime gates (cold-start, VRAM peak, tool-call, latency) are substituted by:**
+> - **Phase 06.6 UAT 18** — `06.6-VERIFICATION.md` (6/6 PASS on 5090 Spain ES, $0.77/h): cold-start 9 min, 4-of-4 endpoint health (LLM/STT/Embed/DCGM all HTTP 200), DCGM VRAM scrape 24.7 GB used / 7.4 GB free under full load, transcription cold 17.5s / warm 0.76s (well under 5s SLO), tool-call with patched Jinja confirmed system_fingerprint `b9191-4f13cb742`.
+> - **Phase 06.7 UAT** — `06.7-VERIFICATION.md` (5/6 PASS + CLEANUP on 5090): Chatterbox VRAM headroom verified (21,972 MiB used / 10,138 MiB free of 32,607 MiB on RTX 5090), zero-shot voice-clone round-trip 24kHz, voice-survives-pod-replacement via S3 WAV refetch (durable contract, NO `.pt`).
+> - **Phase 06.8 UAT** — `06.8-VERIFICATION.md` + `06.8-GW-2GPU-LIVE-UAT.md` (passed): primary force-up on 2×RTX 3090 with PRIMARY_NUM_GPUS=2 + allowlist + cap $0.60; whisper HF cache layout fix (substitui o D-04 weights tarball Phase 1).
+>
+> Phase 1 code artifacts (pod/health-bridge, pod/docker-compose.yml, pod/smoke/smoke.py, pod/Dockerfile, pod/templates/qwen3.5-27b-tool-calling.jinja, .github/workflows/smoke.yml) remain in tree as historical reference. `ghcr.io/ifixtelecom/ifix-ai-pod` image stopped being the production target after Phase 06.6 (`converseai-primary-pod` is current). `smoke.yml` workflow can be invoked manually for retrospective comparison runs but is NOT a gating CI job — `build-gateway` + `build-primary-pod` are.
+
+**Phase Goal (historical):** Ship a reproducible pre-baked pod image that boots the 3 inference servers on a Vast.ai 4090 in ≤5 min with ≥3 GB VRAM headroom under realistic load.
+**Verified (initial):** 2026-04-17T03:00:00Z
+**Status:** superseded (by Phase 06.6/06.7/06.8 — see banner above)
+**Re-verification:** Yes — 2026-05-24 status update reflecting downstream phase coverage.
 
 ---
 

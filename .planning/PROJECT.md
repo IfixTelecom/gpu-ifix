@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcrição (STT) e embeddings para todas as aplicações da empresa (ConverseAI v4, Chat Ifix, Telefonia/NextBilling, Cobranças, Campanhas, voice-api). Roda em GPU própria (RTX 4090 alugada na Vast.ai) com failover automático para OpenRouter e spin-up emergencial paralelo de uma segunda GPU quando a primária cai ou satura.
+Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcrição (STT), TTS e embeddings para todas as aplicações da empresa (ConverseAI v4, Chat Ifix, Telefonia/NextBilling, Cobranças, Campanhas, voice-api). Roda em GPU própria (Vast.ai — primary shape LOCKED Phase 06.8: 2×RTX 3090 single-pod, allowlist hosts 43803/55158, cap $0.60/h; 5090 32 GB validado como alternate UAT 06.6 #18/06.7) com failover automático para OpenRouter/OpenAI e spin-up emergencial paralelo quando a primária cai ou satura.
 
 ## Core Value
 
@@ -49,25 +49,28 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 - Padrão da empresa: TypeScript + Bun para apps, Python para agents AI, Postgres + Redis para infra
 - Postgres compartilhado em Digital Ocean já em uso pelas apps existentes
 
-**Documento de partida:**
-- `ConverseAI_GPU_Stack_Guide.docx` (raiz do projeto) detalha o setup base: stack Qwen + Whisper + BGE-M3 em RTX 4090, scripts de inicialização (llama.cpp server, FastAPI para Whisper/Embedding), comandos tmux, validação por curl, integração via env vars OpenAI-like. Este projeto **estende** esse setup adicionando: gateway Go multi-tenant, failover resiliente, spin-up emergencial, observabilidade central.
+**Documento de partida (histórico — pré-Phase 06.8):**
+- `ConverseAI_GPU_Stack_Guide.docx` (raiz do projeto) detalha o setup base original (single-pod RTX 4090 com Qwen + Whisper + BGE-M3, llama.cpp + FastAPI). Documento permanece como referência histórica; arquitetura final divergiu significativamente — vide Phase 06.6 (custom primary-pod image supervisord 4 children) + Phase 06.7 (TTS Chatterbox na GPU + embed 24/7 CPU off-pod) + Phase 06.8 (2×RTX 3090 single-pod final shape).
 
-**Estimativas de VRAM (do doc):**
+**Estimativas de VRAM (Phase 06.8 final, stack llm + stt + tts + dcgm):**
 - Qwen 3.5 27B Q4_K_M: ~16 GB
-- Whisper large-v3: ~3 GB
-- BGE-M3: ~1 GB
+- Whisper large-v3 (GPU offload): ~3 GB
+- Chatterbox Multilingual TTS: ~4 GB
+- BGE-M3 NÃO está mais no pod (Phase 06.7 D-03: moved off-pod para CPU Infinity 24/7 em n8n-ia-vm:7997)
 - KV cache + overhead: ~2-3 GB
-- Total: ~22-23 GB (margem 1-2 GB em RTX 4090 24 GB; `max_model_len=16384` no vLLM por segurança)
+- Total: ~25 GB. NÃO cabe em 4090 24 GB (UAT 06.6 #16 CUDA OOM confirmado). Cabe em 2×RTX 3090 48 GB (Phase 06.8 split com auto-layer balancing) ou 5090 32 GB single-card.
 
-**Custos de referência (Abril 2026):**
-- Vast.ai 4090: ~$0,35/h (~$84/mês 24/7)
-- OpenRouter Qwen 3.5 27B: pay-per-token (custo variável conforme tráfego)
-- OpenAI Whisper API: ~$0,006/min de áudio
-- OpenAI text-embedding-3-small: $0,02/M tokens
+**Custos de referência (Maio 2026 — atualizado pós-discovery EU 5090 inventory):**
+- Vast.ai 2×RTX 3090 (primary final shape Phase 06.8): cap $0.60/h
+- Vast.ai 5090 (alternate, validado UAT 06.6 #18): ~$0.33-0.77/h observado EU
+- OpenRouter Qwen 3.5 27B: pay-per-token (tier-1 fallback)
+- OpenAI Whisper API: ~$0,006/min de áudio (tier-1 fallback)
+- Infinity multilingual-e5-large CPU n8n-ia-vm: $0 (host compartilhado)
 
 **Justificativa Vast.ai como primária (não RunPod Secure):**
-- Custo significativamente menor (~$84/mês vs ~$165/mês)
+- Custo significativamente menor que RunPod Secure
 - Aceito porque: failover robusto + spin-up emergencial paralelo cobrem instabilidade do host privado típica da Vast.ai
+- Phase 06.6 catalogou broken-CDI hosts via PRIMARY_VAST_MACHINE_BLOCKLIST (operator-curated env)
 
 ## Constraints
 
@@ -75,11 +78,11 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 - **Tech stack — IA**: Stack do doc (Qwen 3.5 27B Q4_K_M via llama-cpp-python, faster-whisper, sentence-transformers BGE-M3) — não trocar para minimizar drift
 - **Tech stack — Persistência**: Postgres compartilhado Digital Ocean (schema dedicado) + Redis — reuso de infra
 - **Tech stack — Deploy**: Docker Compose + Portainer com webhook GitHub — segue padrão converseai-v4
-- **Hardware**: RTX 4090 24 GB — margem mínima de VRAM com 3 modelos; TTS na GPU está fora de escopo por isso
+- **Hardware (Phase 06.8 final)**: 2×RTX 3090 single-pod (allowlist 43803/55158, cap $0.60/h) — ~60% mais barato que 5090 single + maior depth de inventory Vast. 5090 32 GB validado como alternate. **NÃO usar 4090 24 GB** — stack full (llm+stt+tts+kv) ~25 GB excede budget (UAT 06.6 #16 CUDA OOM confirmado)
 - **Compatibilidade**: APIs do gateway devem ser OpenAI-compatible (`/v1/chat/completions`, `/v1/embeddings`, `/v1/audio/transcriptions`) para que apps clientes só troquem `base_url` + `api_key`
 - **Failover invisível**: requests não devem falhar para o cliente final; degradar latência é aceitável, perder request não
 - **Multi-tenant**: cada app autentica com API key própria; quotas e contabilização de custo separadas por app
-- **Guardrails operacionais**: max preço/hora Vast.ai (ex: $0,40/h), máximo 1 pod emergencial ativo simultâneo, alerta diário de uso acumulado
+- **Guardrails operacionais**: cap preço/hora Vast.ai = $0.60/h (Phase 06.8 final, 2×3090 EU inventory), máximo 1 pod emergencial ativo simultâneo, alerta diário de uso acumulado, host blocklist via PRIMARY_VAST_MACHINE_BLOCKLIST
 - **Auto-shutdown**: pod emergencial desliga sozinho após primário ficar saudável 5 min + 5 min de grace period
 
 ## Key Decisions
@@ -89,7 +92,8 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 | Go como linguagem do gateway | Performance, binário estático, baixo overhead em VPS 4 vCPU | — Pending |
 | Vast.ai como GPU primária (não RunPod Secure) | Custo ~50% menor; failover paralelo cobre instabilidade | — Pending |
 | Qwen 3.5 27B fixo (LLM primário e fallback OpenRouter) | Mesmo modelo evita drift de comportamento durante failover | — Pending |
-| TTS continua em CPU (voice-api) | VRAM da 4090 já apertada com LLM+STT+Embed; reavaliar em milestone futura | — Pending |
+| TTS via Chatterbox Multilingual na GPU do pod (~4 GB VRAM) com Piper CPU como tier-1 fallback | Decisão original (TTS CPU only) revisada na Phase 06.7: GPU shape Phase 06.8 (2×3090 48 GB ou 5090 32 GB) tem headroom; Chatterbox MIT + zero-shot voice cloning durável via S3 WAV refetch. voice-api Piper continua como fallback degradado | DONE (Phase 06.7, UAT 06.7 5/6 PASS) |
+| Embed (BGE-M3 → multilingual-e5-large) movido pra CPU 24/7 em n8n-ia-vm (off-pod) | Phase 06.7 D-03: pod só roda peak; embed precisa servir RAG 24/7. multilingual-e5-large CPU Infinity. Reverte parcialmente em SEED-002 (embed volta pro pod GPU como tier-0, CPU vira tier-1) | DONE Phase 06.7; reverso planejado SEED-002 |
 | Detecção de saturação por GPU util/VRAM (não queue depth) | Mais simples, sinal direto, não exige instrumentação fina dos servidores de modelo | — Pending |
 | Postgres compartilhado Digital Ocean | Reuso de infra existente; schema dedicado para isolar | — Pending |
 | Spin-up emergencial automático com guardrails (não aprovação manual) | Failover invisível exige autonomia; cap de preço/h e 1-pod-ativo previnem desperdício | — Pending |
