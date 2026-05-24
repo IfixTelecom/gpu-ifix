@@ -19,7 +19,7 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 ### Active
 
 - [ ] Health-check periódico nos três serviços + circuit breaker (abre quando N falhas seguidas ou latência acima de threshold) — _coberto pelos breakers Phase 3, mas health probe ainda precisa de cleanup_
-- [ ] Failover automático para OpenRouter (Qwen 3.5 27B via Novita), OpenAI Whisper API e OpenAI text-embedding-3-small quando GPU primária cai _(Phase 3 entregou; live UAT pendente)_
+- [ ] Failover automático para OpenRouter (Qwen 3.5 27B via Novita/Fireworks — versão primary upgraded to Qwen 3.6 27B em Phase 06.6 mas OpenRouter tier-1 ainda em 3.5; minor drift aceito até OpenRouter publish Qwen 3.6), OpenAI Whisper API e OpenAI text-embedding-3-small quando GPU primária cai _(Phase 3 entregou; live UAT pendente)_
 - [ ] Load shedding: detectar saturação por utilização de GPU/VRAM e desviar overflow para OpenRouter sem esperar falha real
 - [ ] Spin-up emergencial paralelo de pod Vast.ai quando primária cai (auto, com guardrails: limite de preço/h e máximo 1 pod emergencial ativo)
 - [ ] Cutback automático para primária quando ela voltar saudável por 5 min, com grace period de 5 min antes de desligar pod emergencial
@@ -33,8 +33,8 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 
 ### Out of Scope
 
-- TTS rodando em GPU — voice-api continua em CPU por ora; reconsiderar em milestone futura quando perfilar custo/benefício
-- Modelos diferentes do Qwen 3.5 27B (Llama 3.3, Mixtral, etc.) — fixar Qwen para minimizar drift de comportamento entre primário e fallback OpenRouter
+- ~~TTS rodando em GPU — voice-api continua em CPU por ora~~ — **DONE Phase 06.7**: Chatterbox Multilingual TTS no pod GPU (~4 GB VRAM); Piper CPU permanece como tier-1 fallback degradado
+- Modelos diferentes do Qwen 27B family (Llama 3.3, Mixtral, etc.) — fixar Qwen para minimizar drift. **Primary upgraded Qwen 3.5 → Qwen 3.6 27B em Phase 06.6** (Wave 0 SPIKE 06.6-SPIKE-qwen3.6-jinja.md Round 3 PASS via GGUF-embedded chat_template peg-native parser); OpenRouter tier-1 fallback ainda em Qwen 3.5 27B (não publicado 3.6 em OpenRouter ainda — drift aceito como minor 3.5↔3.6 same family)
 - ElevenLabs ou TTS premium — não está no escopo desta milestone
 - Coqui XTTS-v2 ou voice cloning — descartado por consumir VRAM que comprometeria Qwen
 - Kubernetes / Docker Swarm — Docker Compose simples atende a complexidade desta etapa
@@ -53,7 +53,7 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 - `ConverseAI_GPU_Stack_Guide.docx` (raiz do projeto) detalha o setup base original (single-pod RTX 4090 com Qwen + Whisper + BGE-M3, llama.cpp + FastAPI). Documento permanece como referência histórica; arquitetura final divergiu significativamente — vide Phase 06.6 (custom primary-pod image supervisord 4 children) + Phase 06.7 (TTS Chatterbox na GPU + embed 24/7 CPU off-pod) + Phase 06.8 (2×RTX 3090 single-pod final shape).
 
 **Estimativas de VRAM (Phase 06.8 final, stack llm + stt + tts + dcgm):**
-- Qwen 3.5 27B Q4_K_M: ~16 GB
+- Qwen 3.6 27B Q4_K_M: ~16 GB (MinIO key `qwen3.6-27b-Q4_K_M/v1.0.0/model.gguf` 17.106 GB raw, sha256 `a7cbd3ec…`)
 - Whisper large-v3 (GPU offload): ~3 GB
 - Chatterbox Multilingual TTS: ~4 GB
 - BGE-M3 NÃO está mais no pod (Phase 06.7 D-03: moved off-pod para CPU Infinity 24/7 em n8n-ia-vm:7997)
@@ -63,7 +63,7 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 **Custos de referência (Maio 2026 — atualizado pós-discovery EU 5090 inventory):**
 - Vast.ai 2×RTX 3090 (primary final shape Phase 06.8): cap $0.60/h
 - Vast.ai 5090 (alternate, validado UAT 06.6 #18): ~$0.33-0.77/h observado EU
-- OpenRouter Qwen 3.5 27B: pay-per-token (tier-1 fallback)
+- OpenRouter Qwen 3.5 27B via Fireworks: pay-per-token (tier-1 fallback; minor drift vs primary Qwen 3.6 — see Out of Scope)
 - OpenAI Whisper API: ~$0,006/min de áudio (tier-1 fallback)
 - Infinity multilingual-e5-large CPU n8n-ia-vm: $0 (host compartilhado)
 
@@ -75,7 +75,7 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 ## Constraints
 
 - **Tech stack — Gateway**: Go — escolhido para performance de proxy alta e binário estático leve no deploy de 4 vCPU; difere do padrão TS da empresa, mas natural para gateway
-- **Tech stack — IA**: Stack do doc (Qwen 3.5 27B Q4_K_M via llama-cpp-python, faster-whisper, sentence-transformers BGE-M3) — não trocar para minimizar drift
+- **Tech stack — IA (Phase 06.8 final)**: Qwen 3.6 27B Q4_K_M via llama.cpp `b9191` server-cuda (NÃO llama-cpp-python — Phase 06.6 D-07/D-24), faster-whisper 1.1.1 (silero_vad_v5 vendored) via Speaches 0.9.0rc3, Chatterbox Multilingual TTS (MIT, zero-shot voice clone via S3 WAV refetch — NO `.pt`), Infinity multilingual-e5-large CPU off-pod 24/7. Original BGE-M3 + Qwen 3.5 + llama-cpp-python design substituído.
 - **Tech stack — Persistência**: Postgres compartilhado Digital Ocean (schema dedicado) + Redis — reuso de infra
 - **Tech stack — Deploy**: Docker Compose + Portainer com webhook GitHub — segue padrão converseai-v4
 - **Hardware (Phase 06.8 final)**: 2×RTX 3090 single-pod (allowlist 43803/55158, cap $0.60/h) — ~60% mais barato que 5090 single + maior depth de inventory Vast. 5090 32 GB validado como alternate. **NÃO usar 4090 24 GB** — stack full (llm+stt+tts+kv) ~25 GB excede budget (UAT 06.6 #16 CUDA OOM confirmado)
@@ -91,7 +91,7 @@ Plataforma central de IA da Ifix Telecom: um gateway HTTP que serve LLM, transcr
 |----------|-----------|---------|
 | Go como linguagem do gateway | Performance, binário estático, baixo overhead em VPS 4 vCPU | — Pending |
 | Vast.ai como GPU primária (não RunPod Secure) | Custo ~50% menor; failover paralelo cobre instabilidade | — Pending |
-| Qwen 3.5 27B fixo (LLM primário e fallback OpenRouter) | Mesmo modelo evita drift de comportamento durante failover | — Pending |
+| ~~Qwen 3.5 27B fixo (LLM primário e fallback OpenRouter)~~ Primary upgraded Qwen 3.5 → **Qwen 3.6 27B Q4_K_M** em Phase 06.6 (Wave 0 SPIKE PASS; chat_format=peg-native via GGUF embedded chat_template); OpenRouter tier-1 ainda em Qwen 3.5 27B (Fireworks via OpenRouter) — minor drift aceito | DONE Phase 06.6 (primary); tier-1 lag pending OpenRouter Qwen 3.6 publication |
 | TTS via Chatterbox Multilingual na GPU do pod (~4 GB VRAM) com Piper CPU como tier-1 fallback | Decisão original (TTS CPU only) revisada na Phase 06.7: GPU shape Phase 06.8 (2×3090 48 GB ou 5090 32 GB) tem headroom; Chatterbox MIT + zero-shot voice cloning durável via S3 WAV refetch. voice-api Piper continua como fallback degradado | DONE (Phase 06.7, UAT 06.7 5/6 PASS) |
 | Embed (BGE-M3 → multilingual-e5-large) movido pra CPU 24/7 em n8n-ia-vm (off-pod) | Phase 06.7 D-03: pod só roda peak; embed precisa servir RAG 24/7. multilingual-e5-large CPU Infinity. Reverte parcialmente em SEED-002 (embed volta pro pod GPU como tier-0, CPU vira tier-1) | DONE Phase 06.7; reverso planejado SEED-002 |
 | Detecção de saturação por GPU util/VRAM (não queue depth) | Mais simples, sinal direto, não exige instrumentação fina dos servidores de modelo | — Pending |
