@@ -11,19 +11,19 @@
 // reaches tier-1.
 //
 // Tests (4):
-//   1. TestIntegration_OpenAIWhisperModelRewrite — base case: multipart
-//      model="whisper" + WAV → tier-1 receives model="whisper-1" + audio
-//      bytes byte-identical.
-//   2. R6 Test A — TestIntegration_OpenAIWhisperModelRewrite_R6_MissingModelInjectsTarget
-//      — multipart WITHOUT model field → tier-1 receives multipart with
-//      synthetic model="whisper-1" injected; audio preserved.
-//   3. R6 Test B — TestIntegration_OpenAIWhisperModelRewrite_R6_DuplicateModelRejects
-//      — multipart with 2× model fields → WhisperAbortGuard returns HTTP 400
-//      with JSON error envelope; tier-1 hits == 0 (never forwarded).
-//      WARNING-3: this test MUST PASS (NOT skip) per Plan 03 wire-up.
-//   4. R6 Test C — TestIntegration_OpenAIWhisperModelRewrite_R6_ResolverMissPassesThrough
-//      — DB has no (whisper, openai-whisper) row → multipart with model="whisper"
-//      forwarded with model="whisper" unchanged (pass-through alias).
+//  1. TestIntegration_OpenAIWhisperModelRewrite — base case: multipart
+//     model="whisper" + WAV → tier-1 receives model="whisper-1" + audio
+//     bytes byte-identical.
+//  2. R6 Test A — TestIntegration_OpenAIWhisperModelRewrite_R6_MissingModelInjectsTarget
+//     — multipart WITHOUT model field → tier-1 receives multipart with
+//     synthetic model="whisper-1" injected; audio preserved.
+//  3. R6 Test B — TestIntegration_OpenAIWhisperModelRewrite_R6_DuplicateModelRejects
+//     — multipart with 2× model fields → WhisperAbortGuard returns HTTP 400
+//     with JSON error envelope; tier-1 hits == 0 (never forwarded).
+//     WARNING-3: this test MUST PASS (NOT skip) per Plan 03 wire-up.
+//  4. R6 Test C — TestIntegration_OpenAIWhisperModelRewrite_R6_ResolverMissPassesThrough
+//     — DB has no (whisper, openai-whisper) row → multipart with model="whisper"
+//     forwarded with model="whisper" unchanged (pass-through alias).
 package integration
 
 import (

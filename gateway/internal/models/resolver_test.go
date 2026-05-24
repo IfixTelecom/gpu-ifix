@@ -140,12 +140,12 @@ func TestResolver_AllThreeRolesPerUpstream(t *testing.T) {
 	t.Setenv("UPSTREAM_STT_OPENAI_MODEL", "")
 	t.Setenv("UPSTREAM_EMBED_OPENAI_MODEL", "")
 	r := newResolverFromMap(map[aliasKey]string{
-		{"qwen", "local-llm"}:        "qwen",
-		{"qwen", "openrouter-chat"}:  "qwen/qwen3.5-27b",
-		{"whisper", "local-stt"}:     "whisper",
+		{"qwen", "local-llm"}:         "qwen",
+		{"qwen", "openrouter-chat"}:   "qwen/qwen3.5-27b",
+		{"whisper", "local-stt"}:      "whisper",
 		{"whisper", "openai-whisper"}: "whisper-1",
-		{"bge-m3", "local-embed"}:    "bge-m3",
-		{"bge-m3", "openai-embed"}:   "text-embedding-3-small",
+		{"bge-m3", "local-embed"}:     "bge-m3",
+		{"bge-m3", "openai-embed"}:    "text-embedding-3-small",
 	})
 	cases := []struct {
 		alias, upstream, want string

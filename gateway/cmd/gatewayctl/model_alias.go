@@ -4,38 +4,38 @@
 // Operator CRUD for ai_gateway.model_aliases. Coequal with the
 // UPSTREAM_<UPSTREAM>_MODEL env vars per CONTEXT.md D-06:
 //
-//   gatewayctl model-alias set --alias qwen --upstream openrouter-chat \
-//                              --target qwen/qwen3.5-27b
-//     Multi-instance-consistent override path. Writes to the schema row;
-//     every gateway replica picks up on the next 60s resolver refresh
-//     (models.Resolver.Refresh). Persistent across container restarts.
+//	gatewayctl model-alias set --alias qwen --upstream openrouter-chat \
+//	                           --target qwen/qwen3.5-27b
+//	  Multi-instance-consistent override path. Writes to the schema row;
+//	  every gateway replica picks up on the next 60s resolver refresh
+//	  (models.Resolver.Refresh). Persistent across container restarts.
 //
-//   UPSTREAM_LLM_OPENROUTER_MODEL=qwen/qwen3.5-27b
-//     Per-instance escape hatch. Resolver consults env first inside
-//     Resolve() — env wins over schema row when non-empty. Instance-local;
-//     lost on restart unless the env var is in the stack file. Useful for
-//     A/B testing or emergency overrides without touching the DB.
+//	UPSTREAM_LLM_OPENROUTER_MODEL=qwen/qwen3.5-27b
+//	  Per-instance escape hatch. Resolver consults env first inside
+//	  Resolve() — env wins over schema row when non-empty. Instance-local;
+//	  lost on restart unless the env var is in the stack file. Useful for
+//	  A/B testing or emergency overrides without touching the DB.
 //
 // Both are SUPPORTED and PERMANENT operator override paths — neither is
 // deprecated.
 //
 // Subcommands:
 //
-//   model-alias list
-//     Tab-separated table: ALIAS  UPSTREAM_NAME  ROLE  TARGET
+//	model-alias list
+//	  Tab-separated table: ALIAS  UPSTREAM_NAME  ROLE  TARGET
 //
-//   model-alias get --alias X --upstream Y
-//     Single-row JSON output for scripting.
+//	model-alias get --alias X --upstream Y
+//	  Single-row JSON output for scripting.
 //
-//   model-alias set --alias X --upstream Y --target Z
-//     R7: UPSERT via queries.UpsertModelAlias (composite-PK-aware). NO
-//     ad-hoc SQL. R10: input validation rejects whitespace / control
-//     chars / NUL bytes / over-max-length; upstream MUST exist in
-//     ai_gateway.upstreams (foreign-key emulation since model_aliases
-//     does not carry a real FK to upstreams per Plan 01 schema choice).
+//	model-alias set --alias X --upstream Y --target Z
+//	  R7: UPSERT via queries.UpsertModelAlias (composite-PK-aware). NO
+//	  ad-hoc SQL. R10: input validation rejects whitespace / control
+//	  chars / NUL bytes / over-max-length; upstream MUST exist in
+//	  ai_gateway.upstreams (foreign-key emulation since model_aliases
+//	  does not carry a real FK to upstreams per Plan 01 schema choice).
 //
-//   model-alias delete --alias X --upstream Y
-//     R7: DELETE via queries.DeleteModelAlias.
+//	model-alias delete --alias X --upstream Y
+//	  R7: DELETE via queries.DeleteModelAlias.
 //
 // Role inference: the `Upstream` column of the table stores the role tag
 // ('llm' | 'stt' | 'embed') for backward compatibility (the column

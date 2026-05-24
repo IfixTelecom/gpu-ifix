@@ -15,18 +15,18 @@
 //  1. TestIntegration_Migration0026_UpDownUp — clean path
 //     - freshSchema applies 0001..0026 (6 rows: 3 tier-0 + 3 tier-1).
 //     - db.Down(1) rolls back 0026 → back to 3 tier-0 rows + PK on (alias),
-//       upstream_name column PRESERVED with tier-0 values backfilled.
+//     upstream_name column PRESERVED with tier-0 values backfilled.
 //     - db.Up reapplies 0026 → 6 rows again (idempotent).
 //
 //  2. TestIntegration_Migration0026_DownAbortsOnDuplicateAliases — R3 guard
 //     - Apply migration through 0026 (6 rows).
 //     - INSERT an operator-created duplicate-alias row:
-//       ('qwen', 'llm', 'qwen-custom', 'openrouter-experimental').
+//     ('qwen', 'llm', 'qwen-custom', 'openrouter-experimental').
 //     - Attempt db.Down(1) → goose returns an error whose .Error() contains
-//       "Phase 06.9 migration 0026 Down aborted: duplicate-alias rows exist".
+//     "Phase 06.9 migration 0026 Down aborted: duplicate-alias rows exist".
 //     - Assert table state unchanged (guard fired BEFORE DROP CONSTRAINT —
-//       the migration's PL/pgSQL DO block runs in the same transaction as
-//       the rest of the Down body, so a RAISE EXCEPTION aborts everything).
+//     the migration's PL/pgSQL DO block runs in the same transaction as
+//     the rest of the Down body, so a RAISE EXCEPTION aborts everything).
 package integration
 
 import (

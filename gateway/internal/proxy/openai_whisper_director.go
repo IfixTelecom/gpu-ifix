@@ -44,8 +44,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"strings"
 	"strconv"
+	"strings"
 
 	"github.com/ifixtelecom/gpu-ifix/gateway/internal/models"
 )
@@ -153,11 +153,11 @@ func BuildOpenAIWhisperDirector(
 // Return semantics:
 //   - (newBody, newCT, 0, nil)     — success.
 //   - (nil,     "",    400, nil)   — duplicate "model" field detected; caller
-//                                     SHOULD abort the request with HTTP 400
-//                                     (WhisperAbortGuard does this). The
-//                                     director treats 400 as a defensive no-op.
+//     SHOULD abort the request with HTTP 400
+//     (WhisperAbortGuard does this). The
+//     director treats 400 as a defensive no-op.
 //   - (nil,     "",    0, err)     — parse error; caller falls back to forwarding
-//                                     the original body.
+//     the original body.
 //
 // Audio file bytes are streamed via io.Copy through the multipart.Writer's
 // CreatePart — never decoded as text, never re-encoded (Pitfall #6).

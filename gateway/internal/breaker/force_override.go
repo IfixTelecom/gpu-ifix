@@ -9,25 +9,25 @@
 //
 // Read path (this file):
 //
-//   1. ReadForceOverride(ctx, rdb, name) consults the Redis key
-//      `gw:breaker:force:{name}`. Value is JSON-encoded ForceOverrideValue.
-//      Returns (state, ttl, set, err) — set=true tells the breaker FSM to
-//      honor `state` over observation. Missing key returns set=false (no
-//      error); malformed value returns err != nil (caller falls back to
-//      observation-driven state, NOT silently ignored — operator wants to
-//      know if their override was corrupted).
+//  1. ReadForceOverride(ctx, rdb, name) consults the Redis key
+//     `gw:breaker:force:{name}`. Value is JSON-encoded ForceOverrideValue.
+//     Returns (state, ttl, set, err) — set=true tells the breaker FSM to
+//     honor `state` over observation. Missing key returns set=false (no
+//     error); malformed value returns err != nil (caller falls back to
+//     observation-driven state, NOT silently ignored — operator wants to
+//     know if their override was corrupted).
 //
-//   2. Set has an in-memory force-override cache (Set.forceCache) keyed
-//      by upstream name. CheckForceOverride(name) is a pure map read.
-//      RefreshForceOverride(ctx, name) updates the cache from Redis
-//      (single GET); Set.Execute calls it lazily with a 1s freshness
-//      debounce so the Redis GET is amortized away from the request hot
-//      path (≤10µs/request cache hit, ≤50µs/request cache miss).
+//  2. Set has an in-memory force-override cache (Set.forceCache) keyed
+//     by upstream name. CheckForceOverride(name) is a pure map read.
+//     RefreshForceOverride(ctx, name) updates the cache from Redis
+//     (single GET); Set.Execute calls it lazily with a 1s freshness
+//     debounce so the Redis GET is amortized away from the request hot
+//     path (≤10µs/request cache hit, ≤50µs/request cache miss).
 //
-//   3. Set.Execute checks force-override FIRST (before remoteOpen / local
-//      gobreaker state). Force takes PRECEDENCE over observation per
-//      WARNING-4 acceptance: a forced-open breaker short-circuits with
-//      ErrBreakerOpen even when the observed state is CLOSED.
+//  3. Set.Execute checks force-override FIRST (before remoteOpen / local
+//     gobreaker state). Force takes PRECEDENCE over observation per
+//     WARNING-4 acceptance: a forced-open breaker short-circuits with
+//     ErrBreakerOpen even when the observed state is CLOSED.
 //
 // Write path: Operator-tooling (gateway/cmd/gatewayctl/breaker.go) writes
 // the Redis key with Redis EX so a forgotten override expires naturally —

@@ -24,22 +24,22 @@
 //  1. TestIntegration_EnvOverrideWinsEndToEnd
 //     - t.Setenv UPSTREAM_LLM_OPENROUTER_MODEL=qwen/custom-override-from-env.
 //     - Resolver instantiated AFTER env set (the env-read-on-Resolve
-//       happens every call so timing isn't load-bearing, but ordering
-//       matches a real boot scenario).
+//     happens every call so timing isn't load-bearing, but ordering
+//     matches a real boot scenario).
 //     - Trip local-llm breaker; tier-1 capturing mock receives body with
-//       model="qwen/custom-override-from-env" — NOT the schema target
-//       "qwen/qwen3.5-27b".
+//     model="qwen/custom-override-from-env" — NOT the schema target
+//     "qwen/qwen3.5-27b".
 //
 //  2. TestIntegration_EnvOverrideEmptyFallsBackToSchema
 //     - t.Setenv UPSTREAM_LLM_OPENROUTER_MODEL="" (explicit empty string).
 //     - Schema value "qwen/qwen3.5-27b" wins — confirms empty-string is
-//       treated as unset (Plan 02 Test 8).
+//     treated as unset (Plan 02 Test 8).
 //
 //  3. TestIntegration_EnvOverrideOnlyAffectsMappedUpstream
 //     - t.Setenv UPSTREAM_LLM_OPENROUTER_MODEL=qwen/custom-override-from-env.
 //     - POST /v1/embeddings → tier-1 embed receives model="text-embedding-3-small"
-//       (the schema value; the LLM env var has NO effect on the embed
-//       upstream's resolver lookup).
+//     (the schema value; the LLM env var has NO effect on the embed
+//     upstream's resolver lookup).
 package integration
 
 import (

@@ -11,19 +11,19 @@
 //
 //  1. TestIntegration_LocalLLMPassThroughByteIdentical
 //     - tier-0 = newSuccessMockCapturing registered as "local-llm"; tier-0 is
-//       healthy so no breaker tripped; dispatcher routes to tier-0.
+//     healthy so no breaker tripped; dispatcher routes to tier-0.
 //     - POST /v1/chat/completions {"model":"qwen","messages":[...],
-//       "temperature":0.7} → tier-0 receives the EXACT same body bytes
-//       (bytes.Equal(originalBody, mock.LastBody())); model field stays
-//       "qwen"; temperature + messages preserved exactly.
+//     "temperature":0.7} → tier-0 receives the EXACT same body bytes
+//     (bytes.Equal(originalBody, mock.LastBody())); model field stays
+//     "qwen"; temperature + messages preserved exactly.
 //
 //  2. TestIntegration_LocalEmbedPassThroughByteIdentical
 //     - tier-0 = newSuccessMockCapturing registered as "local-embed"; tier-0
-//       is healthy; dispatcher routes to tier-0.
+//     is healthy; dispatcher routes to tier-0.
 //     - POST /v1/embeddings {"model":"bge-m3","input":["x","y"]} → tier-0
-//       (local-embed) sees identical body, model="bge-m3", NO dimensions
-//       injected (the local embed proxy does NOT touch body — pass-through
-//       per main.go:557 NewEmbeddingsProxy contract).
+//     (local-embed) sees identical body, model="bge-m3", NO dimensions
+//     injected (the local embed proxy does NOT touch body — pass-through
+//     per main.go:557 NewEmbeddingsProxy contract).
 //
 // Together these prove removing models.Handler did NOT regress tier-0 routing.
 // If a future refactor ever introduces a body-mutating step in the local-tier

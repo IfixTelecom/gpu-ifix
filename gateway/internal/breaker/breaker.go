@@ -112,11 +112,11 @@ func (s *Set) Get(name string) (*gobreaker.CircuitBreaker[*http.Response], bool)
 // awareness. Short-circuits with ErrBreakerOpen WITHOUT firing fn when
 // any of the following is TRUE:
 //
-//	1. The upstream name is unknown (defensive — treats like OPEN).
-//	2. Phase 06.9 Plan 04: a force-override has been written to Redis
-//	   `gw:breaker:force:{name}` (operator drove Plan 06 UAT scenario).
-//	3. A remote replica reported OPEN within the last Cooldown window
-//	   (prevents thundering herd on a known-dead upstream).
+//  1. The upstream name is unknown (defensive — treats like OPEN).
+//  2. Phase 06.9 Plan 04: a force-override has been written to Redis
+//     `gw:breaker:force:{name}` (operator drove Plan 06 UAT scenario).
+//  3. A remote replica reported OPEN within the last Cooldown window
+//     (prevents thundering herd on a known-dead upstream).
 //
 // Force-override (2) is checked BEFORE remote-open (3) because operator
 // intent must take precedence over peer observation. The Redis GET that

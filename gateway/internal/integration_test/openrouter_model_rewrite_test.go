@@ -11,22 +11,22 @@
 // reached the upstream wire bytes.
 //
 // Flow:
-//   1. freshSchema bootstraps Postgres with migration 0026 applied
-//      (tier-1 seed rows: qwen/openrouter-chat → qwen/qwen3.5-27b, etc.)
-//   2. Build a models.Resolver against the live pool, call Refresh once.
-//   3. Wire tier0 := newFailMock (always 500), tier1 := newSuccessMockCapturing.
-//   4. Build the OpenRouter director against tier1.server.URL with the
-//      live resolver + "openrouter-chat" upstream name (matches the
-//      production wiring in cmd/gateway/main.go).
-//   5. Construct a proxy.NewDispatcher with role=llm + proxies map keyed
-//      by upstream NAME (matching dispatcher's contract; see dispatcher.go
-//      line 88 godoc).
-//   6. Trip the local-llm breaker via driveBreaker so the dispatcher
-//      routes to tier-1.
-//   7. POST {"model":"qwen", ...} through the dispatcher; assert tier-1
-//      received the request with body.model == "qwen/qwen3.5-27b" (the
-//      schema-driven rewrite) — NOT the literal "qwen" that OpenRouter
-//      404s on.
+//  1. freshSchema bootstraps Postgres with migration 0026 applied
+//     (tier-1 seed rows: qwen/openrouter-chat → qwen/qwen3.5-27b, etc.)
+//  2. Build a models.Resolver against the live pool, call Refresh once.
+//  3. Wire tier0 := newFailMock (always 500), tier1 := newSuccessMockCapturing.
+//  4. Build the OpenRouter director against tier1.server.URL with the
+//     live resolver + "openrouter-chat" upstream name (matches the
+//     production wiring in cmd/gateway/main.go).
+//  5. Construct a proxy.NewDispatcher with role=llm + proxies map keyed
+//     by upstream NAME (matching dispatcher's contract; see dispatcher.go
+//     line 88 godoc).
+//  6. Trip the local-llm breaker via driveBreaker so the dispatcher
+//     routes to tier-1.
+//  7. POST {"model":"qwen", ...} through the dispatcher; assert tier-1
+//     received the request with body.model == "qwen/qwen3.5-27b" (the
+//     schema-driven rewrite) — NOT the literal "qwen" that OpenRouter
+//     404s on.
 package integration
 
 import (
