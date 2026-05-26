@@ -776,27 +776,27 @@ networks:
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should the dashboard share `bd_ai_gateway_prod` or get its own database?**
    - What we know: dashboard isolation is explicit (Pitfall 7 in dashboard/src/lib/db.ts comment); `DASHBOARD_DATABASE_URL` is a separate DSN by design.
    - What's unclear: separate database vs separate schema in same DB.
-   - Recommendation: **separate database** `bd_ai_dashboard_prod` — matches the dev pattern (dashboard schema name `dashboard_auth` lives in a DB pointed at by `DASHBOARD_DATABASE_URL`), simplest isolation guarantee, no shared `search_path` ambiguity.
+   - RESOLVED: Recommendation: **separate database** `bd_ai_dashboard_prod` — matches the dev pattern (dashboard schema name `dashboard_auth` lives in a DB pointed at by `DASHBOARD_DATABASE_URL`), simplest isolation guarantee, no shared `search_path` ambiguity.
 
 2. **Does the gateway container actually need to join the `intra` overlay, or can it stay on a bridge net + label-discover via Swarm?**
    - What we know: Swarm-mode Traefik with `--providers.docker.swarmMode=true --providers.docker.network=intra` only discovers services on `intra` overlay. Standalone compose containers CAN join an overlay if it's `attachable: true` (verified — `intra` is attachable).
    - What's unclear: does standalone-attachment trigger Traefik discovery? Swarm provider typically only scans Swarm `service ls` outputs, not standalone `docker ps`.
-   - Recommendation: confirm in Wave 0 by deploying a hello-world container on `intra` with Traefik labels and observing `docker logs traefik-internal_traefik.1.xxx 2>&1 | grep -i 'router added'`. If Traefik does NOT discover standalone containers via Swarm provider, fall back to **option B: add the docker provider in addition to swarm provider** (`--providers.docker=true` alongside `--providers.docker.swarmMode=true`) — this is supported. **OR option C:** publish gateway:8080 + dashboard:3001 on the host with `127.0.0.1:NNNN` and add static `traefik-dynamic/` file-provider entries on the internal Traefik via a docker-mounted dir (mirrors how the edge Traefik works). Option B is cheapest.
+   - RESOLVED: Recommendation: confirm in Wave 0 by deploying a hello-world container on `intra` with Traefik labels and observing `docker logs traefik-internal_traefik.1.xxx 2>&1 | grep -i 'router added'`. If Traefik does NOT discover standalone containers via Swarm provider, fall back to **option B: add the docker provider in addition to swarm provider** (`--providers.docker=true` alongside `--providers.docker.swarmMode=true`) — this is supported. **OR option C:** publish gateway:8080 + dashboard:3001 on the host with `127.0.0.1:NNNN` and add static `traefik-dynamic/` file-provider entries on the internal Traefik via a docker-mounted dir (mirrors how the edge Traefik works). Option B is cheapest.
 
 3. **Should we keep `ai-gateway-embed` (Infinity tier-0 embed) on its current `ai-gateway-embed_default` bridge network or migrate it to `intra` overlay?**
    - What we know: `ai-gateway-embed` is on its own bridge net; gateway reaches it today (in dev) via `UPSTREAM_EMBED_URL=http://10.10.10.20:7997` (host port).
    - What's unclear: should prod keep the host-IP path (works regardless of network) or move to overlay-internal DNS?
-   - Recommendation: **keep `UPSTREAM_EMBED_URL=http://10.10.10.20:7997`** (host IP path) for Phase 10. Migrating Infinity onto `intra` is an unrelated change with no Phase 10 benefit; defer to whatever phase touches the embed pod next.
+   - RESOLVED: Recommendation: **keep `UPSTREAM_EMBED_URL=http://10.10.10.20:7997`** (host IP path) for Phase 10. Migrating Infinity onto `intra` is an unrelated change with no Phase 10 benefit; defer to whatever phase touches the embed pod next.
 
 4. **GHA self-hosted runners — does Phase 10 need any of the 7 vps-ifix-vm runners?**
    - What we know: gateway + dashboard workflows currently use `runs-on: ubuntu-latest` (GitHub-hosted, not self-hosted). No runner changes needed.
    - What's unclear: do we have GitHub Actions billing healthy now? (history shows billing-blocked runners — see CLAUDE.md GHA runners table.)
-   - Recommendation: confirm in Wave 0 via `gh api /repos/IfixTelecom/gpu-ifix/actions/runs?per_page=1`. If runners are healthy, tag push triggers run. If billing-blocked, plan calls operator to enable.
+   - RESOLVED: Recommendation: confirm in Wave 0 via `gh api /repos/IfixTelecom/gpu-ifix/actions/runs?per_page=1`. If runners are healthy, tag push triggers run. If billing-blocked, plan calls operator to enable.
 
 ---
 
