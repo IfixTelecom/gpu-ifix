@@ -16,7 +16,8 @@ Plans:
 ### Phase 10: prod-deploy-ai-gateway
 
 **Goal:** First production deploy of the ifix-ai-gateway (gateway + dashboard) — operator-managed `docker compose` stack at /opt/ai-gateway-prod/ on n8n-ia-vm (VM 101), public hostnames ai-gateway.converse-ai.app + ai-dashboard.converse-ai.app served via edge Traefik on vps-ifix-vm, new Postgres prod databases bd_ai_gateway_prod + bd_ai_dashboard_prod, new Sentry project ifix-ai-gateway-prod, develop→main fast-forward, cut release v1.0.0, per-tenant golden-path smoke for the 6 client apps, cascade-close Phase 02/03/04/05 live-UAT deferrals.
-**Requirements:** INT-06, PRD-04 (partial — RUNBOOK-DEPLOY.md only per D-18), PRD-07
+**Requirements:** INT-06, PRD-04 (partial), PRD-07
+<!-- PRD-04 (partial) = RUNBOOK-DEPLOY.md only per D-18; full incident runbook deferred to Phase 11. See REQUIREMENTS.md §Traceability for the partial/full split. -->
 **Depends on:** Phase 9
 **Plans:** 6 plans
 
