@@ -18,15 +18,15 @@ Plans:
 **Goal:** First production deploy of the ifix-ai-gateway (gateway + dashboard) — operator-managed `docker compose` stack at /opt/ai-gateway-prod/ on n8n-ia-vm (VM 101), public hostnames ai-gateway.converse-ai.app + ai-dashboard.converse-ai.app served via edge Traefik on vps-ifix-vm, new Postgres prod databases bd_ai_gateway_prod + bd_ai_dashboard_prod, new Sentry project ifix-ai-gateway-prod, develop→main fast-forward, cut release v1.0.0, per-tenant golden-path smoke for the 6 client apps, cascade-close Phase 02/03/04/05 live-UAT deferrals.
 **Requirements:** INT-06, PRD-04 (partial — RUNBOOK-DEPLOY.md only per D-18), PRD-07
 **Depends on:** Phase 9
-**Plans:** 6 plans
+**Plans:** 3/6 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 10-01-PLAN.md — Wave 0 reconciliation + compose/env scaffolds + capacity gate (Pitfall 1/2/4 fixes: network intra, new DB not new schema, edge certResolver letsencrypt)
-- [ ] 10-02-PLAN.md — Postgres prod databases + dashboard better-auth migrations (bootstrap-postgres.sh + migrate-dashboard.sh)
-- [ ] 10-03-PLAN.md — Edge Traefik file-provider entry + Cloudflare DNS records (ai-gateway-prod.yml + cf-dns-create.sh)
+- [x] 10-01-PLAN.md — Wave 0 reconciliation + compose/env scaffolds + capacity gate (Pitfall 1/2/4 fixes: network intra, new DB not new schema, edge certResolver letsencrypt)
+- [x] 10-02-PLAN.md — Postgres prod databases + dashboard better-auth migrations (bootstrap-postgres.sh + migrate-dashboard.sh)
+- [x] 10-03-PLAN.md — Edge Traefik file-provider entry + Cloudflare DNS records (ai-gateway-prod.yml + cf-dns-create.sh)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
