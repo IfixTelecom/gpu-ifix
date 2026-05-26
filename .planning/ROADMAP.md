@@ -19,7 +19,7 @@ Plans:
 **Requirements:** INT-06, PRD-04 (partial), PRD-07
 <!-- PRD-04 (partial) = RUNBOOK-DEPLOY.md only per D-18; full incident runbook deferred to Phase 11. See REQUIREMENTS.md §Traceability for the partial/full split. -->
 **Depends on:** Phase 9
-**Plans:** 3/6 plans executed
+**Plans:** 4/6 plans executed
 
 Plans:
 
@@ -31,7 +31,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 10-04-PLAN.md — RUNBOOK-DEPLOY + REQUIREMENTS remap + ROADMAP Phase 11 placeholder (PRD-04 partial; D-16 split)
+- [x] 10-04-PLAN.md — RUNBOOK-DEPLOY + REQUIREMENTS remap + ROADMAP Phase 11 placeholder (PRD-04 partial; D-16 split)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
