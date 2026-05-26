@@ -36,11 +36,19 @@
 # passHostHeader: true — gateway + dashboard read the original `Host:` header
 # so Better Auth cookie scope and audit-log Host context survive the proxy hop.
 
+# DEVIATION 2026-05-26 — Traefik internal v2.11 swarmMode bypass.
+# n8n-ia-vm runs Traefik internal v2.11 with --providers.docker.swarmMode=true,
+# which makes the docker provider ignore standalone (non-Swarm) containers.
+# Gateway + dashboard containers are NEVER discovered via Traefik labels.
+# Operator-approved fix (2026-05-26): bypass traefik-internal by publishing
+# host ports on the gateway compose stack (10.10.10.20:8080 + :3001) and
+# routing each prod hostname to its own dedicated upstream service below.
+
 http:
   routers:
     ai-gateway-prod:
       rule: "Host(`ai-gateway.converse-ai.app`)"
-      service: n8n-ia-prod-internal
+      service: ai-gateway-prod-upstream
       entryPoints:
         - websecure
       tls:
@@ -48,15 +56,21 @@ http:
 
     ai-dashboard-prod:
       rule: "Host(`ai-dashboard.converse-ai.app`)"
-      service: n8n-ia-prod-internal
+      service: ai-dashboard-prod-upstream
       entryPoints:
         - websecure
       tls:
         certResolver: letsencrypt
 
   services:
-    n8n-ia-prod-internal:
+    ai-gateway-prod-upstream:
       loadBalancer:
         servers:
-          - url: "http://10.10.10.20:80"
+          - url: "http://10.10.10.20:8080"
+        passHostHeader: true
+
+    ai-dashboard-prod-upstream:
+      loadBalancer:
+        servers:
+          - url: "http://10.10.10.20:3001"
         passHostHeader: true

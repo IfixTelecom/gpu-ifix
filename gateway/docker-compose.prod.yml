@@ -41,14 +41,29 @@
 #   OMITS the `tls.certresolver` label entirely and uses
 #   `entrypoints=web` (:80) instead of `=websecure`.
 #
-# Anti-patterns to avoid (RESEARCH §Anti-Patterns):
-#   - No host port publishes (gateway:8080, dashboard:3001 are
-#     reachable only via the internal overlay — Traefik label
-#     discovery is the single entry path).
+# DEVIATION 2026-05-26 — Traefik internal v2.11 swarmMode bypass:
+#   The traefik-internal_traefik Swarm service on n8n-ia-vm runs Traefik
+#   v2.11 with --providers.docker.swarmMode=true; in v2 this flag makes
+#   the docker provider ignore standalone (non-Swarm) containers, so the
+#   gateway + dashboard compose containers are NEVER discovered via
+#   Traefik labels (preflight probe 4 FAIL'd 2026-05-26). Two fixes
+#   exist: (a) convert to Swarm services (breaks D-11 direct compose),
+#   (b) bypass Traefik internal by publishing host ports and pointing
+#   edge Traefik (vps-ifix-vm) directly at 10.10.10.20:8080 + :3001.
+#   Operator picked (b) — host-port bypass, minimal infra change.
+#
+#   Implication:
+#     - gateway publishes 8080:8080, dashboard 3001:3001 (bind 10.10.10.20)
+#     - Traefik labels removed (no longer used by traefik-internal)
+#     - artifacts/ai-gateway-prod.yml URLs updated to host:port direct
+#     - n8n-ia-vm UFW: ports 8080+3001 reachable from 10.10.10.0/24
+#       only (NAT private; not exposed to public 162.55.92.154 since
+#       ingress is via edge Traefik on vps-ifix-vm:443 → DNAT to .30
+#       → edge file-provider routes to 10.10.10.20:8080/:3001).
+#
+# Anti-patterns to avoid:
 #   - No `deploy:` block (see Pitfall 3 above).
 #   - No `worker_intra` (see Pitfall 1 above).
-#   - No `tls.certresolver` label on the gateway/dashboard services
-#     (see Pitfall 4 above).
 
 services:
   ifix-ai-gateway:
@@ -58,19 +73,14 @@ services:
     env_file: .env
     networks:
       - intra
+    ports:
+      - "10.10.10.20:8080:8080"
     healthcheck:
       test: ["CMD", "/gateway", "--self-check"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 60s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=intra"
-      - "traefik.http.routers.ai_gateway.rule=Host(`ai-gateway.converse-ai.app`)"
-      - "traefik.http.routers.ai_gateway.entrypoints=web"
-      - "traefik.http.services.ai_gateway.loadbalancer.server.port=8080"
-      - "traefik.http.services.ai_gateway.loadbalancer.passHostHeader=true"
 
   ifix-ai-dashboard:
     image: ghcr.io/ifixtelecom/ifix-ai-dashboard:${DASHBOARD_TAG:-v1.0.0}
@@ -85,13 +95,8 @@ services:
       - ifix-ai-gateway
     networks:
       - intra
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=intra"
-      - "traefik.http.routers.ai_dashboard.rule=Host(`ai-dashboard.converse-ai.app`)"
-      - "traefik.http.routers.ai_dashboard.entrypoints=web"
-      - "traefik.http.services.ai_dashboard.loadbalancer.server.port=3001"
-      - "traefik.http.services.ai_dashboard.loadbalancer.passHostHeader=true"
+    ports:
+      - "10.10.10.20:3001:3001"
 
   redis-gateway-prod:
     image: redis:7-alpine
