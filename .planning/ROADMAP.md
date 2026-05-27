@@ -46,14 +46,14 @@ Plans:
 **Goal:** Endurecer prod pós-Phase 10 — PRD-01 load test 30min sustained com SLO v1.0 D-04, PRD-02 chaos primary kill (Vast API DELETE), PRD-03 chaos OpenRouter DROP egress (iptables on n8n-ia-vm), PRD-04 RUNBOOK-INCIDENTS.md (4 classes D-11) + POSTMORTEM-TEMPLATE.md (Google SRE blameless 9-section), PRD-05 LGPD signoff doc-only deliverables, PRD-06 dashboard SSO hardening (better-auth twoFactor + rateLimit + allowlist + session 30min). Fold Phase 10 deferred items (D-18.1..D-18.4) e separação per-env keys (D-19).
 **Requirements:** PRD-01, PRD-02, PRD-03, PRD-04 (full), PRD-05, PRD-06
 **Depends on:** Phase 10
-**Plans:** 4/10 plans executed
+**Plans:** 5/10 plans executed
 
 Plans:
 
 **Wave 1**
 
 - [x] 11-01-PLAN.md — Wave 1: PRD-01 load-test scaffolding (audit-log-export.py + load-replay.py + load-replay-report-schema.json + .gitignore)
-- [ ] 11-02-PLAN.md — Wave 1: PRD-06 dashboard SSO hardening (twoFactor + rateLimit + allowlist + session expiresIn=30min + 2FA enroll/challenge UI + BLOCKING migrate)
+- [x] 11-02-PLAN.md — Wave 1: PRD-06 dashboard SSO hardening (twoFactor + rateLimit + allowlist + session expiresIn=30min + 2FA enroll/challenge UI + BLOCKING migrate)
 - [x] 11-03-PLAN.md — Wave 1: PRD-05 LGPD signoff docs (LGPD-SIGNOFF-PROCESS.md + LGPD-SIGNOFF-LETTER-TEMPLATE.md)
 - [x] 11-04-PLAN.md — Wave 1: Phase 10 fold D-18.1..D-18.3 (gatewayctl debug emit-error + key list + smoke-sensitive-failover race fix)
 - [x] 11-05-PLAN.md — Wave 1: D-19 per-env upstream keys + D-18.4 GHA retrigger doc + scripts/dashboard/seed-admins.sh
