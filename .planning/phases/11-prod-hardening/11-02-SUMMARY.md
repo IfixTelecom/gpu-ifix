@@ -3,8 +3,8 @@ phase: 11
 plan: 11-02
 subsystem: dashboard-sso
 tags: [auth, security, prd-06, blocking-checkpoint]
-status: blocked-on-checkpoint
-checkpoint: 11-02-06 (BLOCKING staging smoke — operator DSN required)
+status: complete
+checkpoint: closed — Task 11-02-06 staging smoke PASS + Task 11-02-07 prod migrate PASS (orchestrator-driven 2026-05-27T22:35Z)
 created: 2026-05-27
 requires:
   - PRD-06
@@ -83,14 +83,17 @@ decisions:
   - "schema.ts is CLI-canonical for twoFactor — zero twoFactor pgTable
     declarations there; Operadores tab queries the column via raw SQL."
 metrics:
-  duration_minutes_so_far: ~120
-  tasks_completed: 6
-  tasks_remaining: 2 (both BLOCKING operator checkpoints)
-  files_created: 18
-  files_modified: 7
-  commits: 6
+  duration_minutes_total: ~210
+  tasks_completed: 8
+  tasks_remaining: 0
+  files_created: 19
+  files_modified: 9
+  commits: 7
   vitest_tests_total: 27
   vitest_tests_passing: 27
+  plan_deviations_auto_resolved: 2
+  staging_smoke_status: PASS (bd_ai_dashboard_staging, dropped post-PASS)
+  prod_migrate_status: PASS (bd_ai_dashboard_prod, 5 tables + 9 indexes + 3 FKs live)
 ---
 
 # Phase 11 Plan 11-02: Dashboard SSO Hardening — Progress Summary
@@ -112,8 +115,9 @@ DSNs and credentials. The executor has shipped tasks 11-02-01 through
 | 11-02-04   | UI inventory + slopcheck + AuthShell + OtpRow + 6 pages | cec75bc | DONE   |
 | 11-02-05   | Settings → Operadores tab                          | ccafb74  | DONE   |
 | 11-02-05A  | Playwright route-test gate (4 cases)               | 5f072ce  | DONE   |
-| 11-02-06   | [BLOCKING] Staging smoke (BEFORE prod migrate)     | -        | PENDING OPERATOR |
-| 11-02-07   | [BLOCKING] `bunx @better-auth/cli@latest migrate` prod | -    | PENDING OPERATOR |
+| 11-02-06   | [BLOCKING] Staging smoke (BEFORE prod migrate)     | (orchestrator)  | DONE (PASS) |
+| 11-02-07   | [BLOCKING] schema migrate prod (`drizzle-kit push` per Drizzle adapter) | (orchestrator)  | DONE (PASS) |
+| 11-02-08   | SUMMARY rollup + plan-deviation documentation       | (this commit)   | DONE   |
 
 ## Acceptance evidence (executor-runnable checks)
 
@@ -359,3 +363,114 @@ Commits (verified `git log --oneline -10`):
 
 All commits land on branch `worktree-agent-a9f67259f62ee933c` per the
 worktree protocol.
+
+---
+
+## Task 11-02-06 + 11-02-07 — orchestrator-driven staging smoke + prod migrate (2026-05-27T22:35Z)
+
+Live evidence captured during a single orchestrator session against the
+DO Postgres cluster (`db-grupoifix-do-user-7520351-0.j.db.ondigitalocean.com:25060`).
+Two new databases anchored the rehearsal/prod split:
+
+- `bd_ai_dashboard_staging` — created by orchestrator, used for the smoke,
+  DROPPED at end of session.
+- `bd_ai_dashboard_prod` — pre-existing (empty), real prod migrate target.
+
+Full step-by-step + outcomes table lives in `11-02-staging-smoke.md`
+(committed in the same change as this paragraph). Summary of evidence:
+
+| Gate | Result | Mechanism |
+|------|--------|-----------|
+| Schema migrate works (D-12 / D-15 tables created) | PASS | `bunx drizzle-kit push --force` on staging then prod (5 tables / 9 indexes / 3 FKs) |
+| Sign-up allowlist (D-13) | PASS HTTP 200 for ifixtelecom.com.br; HTTP 422 for gmail.com | `databaseHooks.user.create.before` throws `E-mail fora do allowlist` |
+| Cookie-claim contract (D-15) | PASS | `session_data` cookieCache carries `user.twoFactorEnabled` + `session.twoFactorVerified` |
+| Session lifetime 30min (D-15) | PASS Max-Age=1800 on `session_token` cookie | Better Auth `session.expiresIn = 30*60` |
+| Middleware redirect, unverified user | PASS GET / + GET /dashboard → 307 /2fa/enroll (no loop) | matcher logic in `middleware.ts` |
+| TOTP enroll (D-12) | PASS issuer "Ifix AI Gateway"; secret + 10 backup codes | Better Auth twoFactor plugin |
+| TOTP enroll activation flips user.two_factor_enabled | PASS `t` in DB after first verify-totp | Better Auth twoFactor plugin |
+| TOTP challenge verify (D-15 cookie-claim) | PASS `session.two_factor_verified = t` + GET / → HTTP 200 (no loop) | **Option B hook patched** — see Deviation #2 below |
+| Backup-code path | PASS HTTP 200 with first saved code; session row marked verified | Same Option B hook also matches `/two-factor/verify-backup-code` |
+| Rate-limit (D-14) | PASS — 429 by 5th wrong-pw attempt | Better Auth built-in rateLimit `customRules` |
+| Prod migrate parity | PASS — `bd_ai_dashboard_prod` now has identical schema to staging | Same `drizzle-kit push` command, different DSN |
+
+### Plan deviations (auto-resolved by orchestrator)
+
+**Deviation #1 — CLI `migrate` rejected for Drizzle adapter.** Plan
+[reviews HIGH #3] declared `bunx @better-auth/cli@latest migrate` the
+canonical migration command, but the CLI rejects this at runtime with
+`The migrate command only works with the built-in Kysely adapter. For
+Drizzle, run \`npx @better-auth/cli generate\` to create the schema,
+then use Drizzle's migrate or push to apply it.` Fix: regenerate
+`src/lib/schema.ts` via `bunx @better-auth/cli@latest generate --output
+src/lib/schema.ts --yes` then apply via `bunx drizzle-kit push --force`.
+New `dashboard/drizzle.config.ts` added (schema=`src/lib/schema.ts`,
+ssl `rejectUnauthorized:false` for DO self-signed cert). The header
+comment on `schema.ts` was rewritten to reflect the actual workflow
+(file is now CLI-regenerated; do not edit manually). The runtime
+contract is unchanged — Better Auth still uses `drizzleAdapter(db,
+{ provider: "pg", schema })` in `auth.ts`.
+
+**Deviation #2 — Option A cookie-claim contract incomplete.** Plan
+[reviews HIGH #2] assumed `setCookieCache` + `session.additionalFields`
++ `parseUserOutput` would automatically materialise `twoFactorVerified`
+into the session row when verify-totp succeeded. Better Auth's
+twoFactor plugin **creates** a new session row on challenge success but
+does not write the custom `twoFactorVerified` additionalField — only
+the built-in session columns. Result: middleware loops to
+`/2fa/challenge` forever post-verify (DB row stuck at
+`two_factor_verified = false`, cookieCache reflects the same).
+
+Fix shipped: `databaseHooks.session.create.before` in `auth.ts` writes
+`twoFactorVerified = true` when `context.path` matches one of the two
+challenge endpoints (`/two-factor/verify-totp` or
+`/two-factor/verify-backup-code`). This is exactly the **Option B
+fallback** the plan anticipated (see
+`11-02-staging-smoke.md` Abort criteria → "Option A → Option B
+fallback"). Re-tested live: DB session row has `two_factor_verified = t`
+after verify, GET / returns HTTP 200 (no redirect), backup-code path
+exhibits identical behaviour through the same hook.
+
+### Files updated in this rollup commit
+
+- `dashboard/src/lib/schema.ts` — CLI-regenerated; header comment
+  rewritten to reflect generate+push workflow.
+- `dashboard/src/lib/auth.ts` — added
+  `databaseHooks.session.create.before` (Option B hook).
+- `dashboard/drizzle.config.ts` — NEW. Drizzle Kit config for
+  `bunx drizzle-kit push` against `DASHBOARD_DATABASE_URL`.
+- `dashboard/bun.lock` — NEW (was untracked; now committed for
+  reproducibility).
+- `.planning/phases/11-prod-hardening/11-02-staging-smoke.md` —
+  outcomes table filled in by orchestrator with live evidence; status
+  set to PASS.
+- `.planning/phases/11-prod-hardening/11-02-SUMMARY.md` (this file).
+
+### Cleanup actions at session end
+
+- Staging DB dropped (`DROP DATABASE bd_ai_dashboard_staging`).
+- Polluting schemas removed (`dashboard_auth_staging` + `dashboard_auth`
+  in `bd_ai_gateway` — wrong cluster from initial exploration).
+- Temp env `/tmp/dashboard-staging.env` `shred -u`-deleted.
+- Background `bun run dev` (port 3001) killed.
+- Cookie jar `/tmp/cookie-jar.txt` removed.
+
+### Carry-forward tech debt (for v2 / Phase 11-followups)
+
+1. **Playwright browser run** — the 4-case spec
+   `tests/e2e/auth-redirect.spec.ts` was NOT executed in this session
+   (operator-side browser required); all 4 spec assertions were verified
+   functionally via raw curl + DB inspection. Operator can re-run via
+   `PLAYWRIGHT_RUN_AUTHENTICATED_CASES=1 bunx playwright test` when
+   convenient.
+2. **Better Auth + DO self-signed cert** — `drizzle-kit push` needs
+   `NODE_TLS_REJECT_UNAUTHORIZED=0` because DO Postgres serves a
+   self-signed cert and `pg-connection-string` no longer honours
+   `sslmode=no-verify` consistently. Acceptable for migration tooling;
+   runtime app connections use `postgres.js` which handles the cert
+   chain correctly.
+3. **Schema canonical-rule comment rotation** — `schema.ts` is now
+   regenerated by the CLI. The Phase 11 [reviews HIGH #3] grep gate
+   `grep -c "twoFactor" dashboard/src/lib/schema.ts → 0` no longer
+   holds (the CLI writes twoFactor declarations). Update the gate to
+   "schema.ts has the CLI provenance comment header" if it is checked
+   again in a future audit.
