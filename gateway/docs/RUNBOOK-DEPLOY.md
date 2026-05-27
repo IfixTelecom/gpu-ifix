@@ -365,6 +365,154 @@ After the tag-build is green, run the Roll-Forward procedure above with `v1.0.X-
 
 ---
 
+## GHA retrigger procedure (D-18.4)
+
+**Read this when** a tag push (`git push origin v1.0.0`) did NOT trigger `build-gateway.yml` (or `build-dashboard.yml`) and no image was published to GHCR. Symptom observed in Phase 10: the workflow run list shows no entry for the tag, yet `git ls-remote origin refs/tags/v1.0.0` returns the tag. Root cause is GitHub Actions' same-SHA dedup — if the commit pointed-to by the tag was already processed in a prior run (e.g. develop tip was already built before the fast-forward to main), the tag-push event is deduped and no new run is dispatched (RESEARCH Pitfall 6).
+
+**Fix (operator-managed, ~5 minutes):**
+
+1. Open a shell on ops-claude (PAT in `~/.git-credentials`, mode 600 — already populated).
+
+2. Re-dispatch the gateway build explicitly via `workflow_dispatch`. The workflow already exposes `inputs.tag` at `.github/workflows/build-gateway.yml` lines 18-23, so `-f tag=v1.0.0` is honored:
+
+   ```bash
+   gh workflow run build-gateway.yml --ref v1.0.0 -f tag=v1.0.0
+   ```
+
+3. Re-dispatch the dashboard build the same way:
+
+   ```bash
+   gh workflow run build-dashboard.yml --ref v1.0.0 -f tag=v1.0.0
+   ```
+
+4. Tail the dispatched runs:
+
+   ```bash
+   gh run list --limit 5 --workflow build-gateway.yml
+   gh run list --limit 5 --workflow build-dashboard.yml
+   gh run watch
+   ```
+
+5. Confirm the new images landed in GHCR (the canonical evidence that the retrigger succeeded):
+
+   ```bash
+   docker pull ghcr.io/ifixtelecom/ifix-ai-gateway:v1.0.0
+   docker pull ghcr.io/ifixtelecom/ifix-ai-dashboard:v1.0.0
+   ```
+
+**Fallback** — if the explicit `workflow_dispatch` retrigger STILL produces no new run (suspected runner pool stuck OR repository setting blocking `workflow_dispatch`), delete and recreate the tag with a fresh SHA so the push event cannot be deduped (RESEARCH Pitfall 6 last bullet):
+
+```bash
+git tag -d v1.0.0
+git push origin :refs/tags/v1.0.0
+# (re-fast-forward main from develop if needed so a NEW SHA exists at the tip)
+git tag -a v1.0.0 -m "Phase 10: v1.0.0 (re-cut after dedup)"
+git push origin v1.0.0
+```
+
+The tag-push event with a new SHA cannot be deduped by GHA and triggers a fresh build. Use this fallback only when `workflow_dispatch` itself is non-functional — the explicit dispatch in steps 2-3 is the preferred recovery for the dedup-only failure mode.
+
+---
+
+## Per-env key rotation (D-19)
+
+**Read this when** the operator needs to (a) bootstrap the prod stack with upstream API keys that are distinct from the dev keys (FIRST cut — Phase 10 HUMAN-UAT), OR (b) rotate the prod keys on the annual cadence, OR (c) revoke and re-issue after an incident (per RUNBOOK-INCIDENTS class "Auth/Quota"). Phase 11 D-19 mandates that prod `OpenRouter` + `OpenAI` keys MUST be distinct from the dev-stack keys so spend and incident blast radius are partitioned by environment (RESEARCH Open Question #4 + CONTEXT.md D-19).
+
+**Expected wall-clock:** ~30 minutes (3 dashboard key creations + sudoedit + restart + sanitized diff verify + revoke).
+
+**Pitfall 7 reminder:** the dev stack at `/opt/ai-gateway-dev/` on `vps-ifix-vm` keeps its current keys (sourced from `~/.claude/CLAUDE.md`). The prod stack at `/opt/ai-gateway-prod/` on `n8n-ia-vm` gets the new env=prod-labeled keys.
+
+**Procedure (step-numbered, operator-only):**
+
+1. Create a NEW OpenRouter API key at https://openrouter.ai/keys with label `env=prod`. Copy the raw value to the OS clipboard ONCE; do NOT paste it into any CLI argument or shell history. (T-11-OPS-02 mitigation.)
+
+2. Create a NEW OpenAI API key at https://platform.openai.com/api-keys with label `env=prod`. Copy the raw value the same way.
+
+3. Create a Vast.ai key at https://cloud.vast.ai/account/ → API Keys IF the Vast API supports per-key labels (verify in the dashboard before committing to per-env). If labels are not supported, fall back to the SHARED key per Open Question #4 — document the fallback in `~/.claude/CLAUDE.md` for the prod section.
+
+4. SSH n8n-ia-vm and `sudoedit /opt/ai-gateway-prod/.env` (mode 600). Replace the three upstream auth-bearer values with the new prod keys:
+
+   ```
+   UPSTREAM_LLM_OPENROUTER_AUTH_BEARER=<paste from step 1>
+   UPSTREAM_STT_OPENAI_AUTH_BEARER=<paste from step 2>
+   UPSTREAM_EMBED_OPENAI_AUTH_BEARER=<paste from step 2>
+   ```
+
+   Save and exit `sudoedit` — the temporary file is removed automatically.
+
+5. Restart the gateway and verify both surfaces are healthy:
+
+   ```bash
+   ssh n8n-ia-vm 'cd /opt/ai-gateway-prod && docker compose restart ai-gateway'
+   sleep 10
+   curl -sS -o /dev/null -w "gateway:%{http_code}\n" https://ai-gateway.converse-ai.app/health
+   # Expect: gateway:200
+
+   # SSO hardening sanity (Gemini suggestion): verify dashboard auth surface is not broken
+   # by an upstream-only restart. The endpoint is Better Auth's built-in /ok route
+   # (HIDE_METADATA flagged) which returns {"ok": true} on success.
+   curl -sS -o /dev/null -w "dashboard:%{http_code}\n" https://ai-dashboard.converse-ai.app/api/auth/ok
+   # Expect: dashboard:200
+   ```
+
+6. SANITIZED diff verification — confirm prod and dev `.env` upstream keys are DISTINCT without exposing raw values to the terminal or shell history. The output MUST NOT contain raw `=ifix_`, `=sk-or-`, or `=sk-` substrings. Two recipes (operator picks one; both produce sanitized output):
+
+   **Recipe A — SHA-256 hash diff (preferred, fully opaque):**
+
+   ```bash
+   diff \
+     <(ssh n8n-ia-vm 'sudo grep -E "^UPSTREAM_(LLM_OPENROUTER|STT_OPENAI|EMBED_OPENAI)_AUTH_BEARER=" /opt/ai-gateway-prod/.env | openssl sha256') \
+     <(ssh vps-ifix-vm 'sudo grep -E "^UPSTREAM_(LLM_OPENROUTER|STT_OPENAI|EMBED_OPENAI)_AUTH_BEARER=" /opt/ai-gateway-dev/.env | openssl sha256')
+   ```
+
+   Non-empty diff confirms separation. The diff output contains only `SHA2-256(stdin)= <hex>` lines — never the raw key. Hard rule: if either side prints a literal `=ifix_…` / `=sk-or-…` / `=sk-…` substring, the recipe was mis-typed; re-run with the `openssl sha256` pipe.
+
+   **Recipe B — first-4-char prefix projection (granular per-var, still sanitized):**
+
+   ```bash
+   sanitize() {
+     # Reads VAR=VALUE lines, prints "VAR=<first4>XXXX****" (masks chars 5+).
+     awk -F= 'NF>=2 { v=$2; for (i=3;i<=NF;i++) v=v"="$i; printf "%s=%s****\n", $1, substr(v,1,4) }'
+   }
+   diff \
+     <(ssh n8n-ia-vm 'sudo grep -E "^UPSTREAM_(LLM_OPENROUTER|STT_OPENAI|EMBED_OPENAI)_AUTH_BEARER=" /opt/ai-gateway-prod/.env' | sanitize) \
+     <(ssh vps-ifix-vm 'sudo grep -E "^UPSTREAM_(LLM_OPENROUTER|STT_OPENAI|EMBED_OPENAI)_AUTH_BEARER=" /opt/ai-gateway-dev/.env' | sanitize)
+   ```
+
+   Sample sanitized output (no raw key material — only the 4-char prefix marker followed by the `****` mask):
+
+   ```
+   UPSTREAM_LLM_OPENROUTER_AUTH_BEARER=<PROD-PREFIX-4>****
+   UPSTREAM_LLM_OPENROUTER_AUTH_BEARER=<DEV-PREFIX-4>****
+   ```
+
+   Where `<PROD-PREFIX-4>` / `<DEV-PREFIX-4>` are the 4-char prefix projections (e.g. for a Better-Auth-issued OpenRouter key the projection is the first 4 characters of the issued raw value — the runbook never quotes them literally). Differing prefixes confirm the keys are distinct. Same prefix is NOT sufficient evidence of identical keys (collisions possible on 4 chars) — re-run Recipe A if Recipe B shows matching prefixes.
+
+   **Hard rule (T-11-OPS-11 mitigation):** any diff output that contains a literal multi-char tail like `=ifix_****`, `=sk-or-****`, or `=sk-****` followed by raw alphanumeric characters of the actual key body is a FAILURE of the procedure — operator MUST stop, scrub shell history (`history -c && history -w` then `unset HISTFILE` for the session), and re-run with the sanitized recipe. Only the masked-prefix forms `ifix_****`, `sk-or-****`, `sk-****` (asterisks AFTER the public prefix marker) are acceptable in the terminal.
+
+7. Revoke the dev-shared OpenRouter and OpenAI keys in their respective dashboards — but ONLY after step 5 verifies the new prod keys work. Order matters: revoke-before-verify causes a prod outage if the new key was mis-typed.
+
+8. **2FA recovery cross-reference (reviews LOW #4):** if a prod-stack admin is rotating keys because their dashboard account was compromised AND their TOTP device + backup codes are also lost, do NOT manipulate the `dashboard_auth.twoFactor` table directly. The audit-logged recovery procedure (separation-of-duty: locked-out admin requests via secondary channel; a DIFFERENT admin executes; audit row written BEFORE the SQL UPDATE) lives in `gateway/docs/RUNBOOK-2FA-RECOVERY.md` (delivered in Phase 11 Plan 11-09). Consult that runbook FIRST. The future `gatewayctl admin reset-2fa --email <addr>` subcommand (when shipped) will wrap audit + SQL atomically — until then, follow the safety-wrapped SQL snippets in the recovery runbook.
+
+**Per-env key matrix:**
+
+| Var | Dev source | Prod source | Rotation cadence |
+|-----|------------|-------------|------------------|
+| `UPSTREAM_LLM_OPENROUTER_AUTH_BEARER` | shared in `~/.claude/CLAUDE.md` | `env=prod` label in OpenRouter dashboard | annual or on-incident |
+| `UPSTREAM_STT_OPENAI_AUTH_BEARER` | shared in `~/.claude/CLAUDE.md` | `env=prod` label in OpenAI dashboard | annual |
+| `UPSTREAM_EMBED_OPENAI_AUTH_BEARER` | shared in `~/.claude/CLAUDE.md` | `env=prod` label in OpenAI dashboard | annual |
+| `VAST_AI_API_KEY` | shared in `~/.claude/CLAUDE.md` | per-env if Vast API supports labels; else shared (Open Question #4 fallback) | annual |
+
+**Session cleanup advisory (Pitfall 5 / D-15 — optional):** after a dashboard image roll that changes SSO behavior (e.g. 2FA enforcement enabled in Phase 11 Plan 11-02), operators may choose to invalidate long-lived sessions so existing admins are forced to re-authenticate under the new policy. The advisory query is:
+
+```sql
+DELETE FROM dashboard_auth.session WHERE expires_at > NOW() + INTERVAL '30 minutes';
+```
+
+Coordinate via WhatsApp with the other admins BEFORE running so nobody is logged-out mid-task.
+
+---
+
 ## Verification
 
 (post-deploy gate)
