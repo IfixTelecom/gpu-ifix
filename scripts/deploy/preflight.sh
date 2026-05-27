@@ -20,6 +20,12 @@
 #                                        to dual-provider (--providers.docker=true
 #                                        alongside --providers.docker.swarmMode=true)
 #                                        per RESEARCH Open Question 2 option B.
+#   4b) Dashboard health probe         — Phase 11 Plan 11-05 (Gemini suggestion).
+#                                        curl -fs $DASHBOARD_HEALTH_URL (Better Auth
+#                                        /api/auth/ok endpoint chosen + verified
+#                                        2026-05-27). Non-200 fails the preflight so
+#                                        an SSO hardening regression cannot silently
+#                                        break the operator-facing dashboard.
 #   5) GHA runners health              — Assumption A7. `gh run list` confirms a recent
 #                                        build OR explicitly flags "no recent runs" so
 #                                        operator can confirm runner pool.
@@ -30,6 +36,7 @@
 #   2 — disk > 80% OR egress IP mismatch (capacity gate per RESEARCH Pitfall 6)
 #   3 — internal-Traefik discovery probe FAIL (fallback required)
 #   4 — intra overlay missing or not attachable (Pitfall 1)
+#   5 — dashboard health probe FAIL (non-200 at $DASHBOARD_HEALTH_URL — 11-05)
 #
 # IMPORTANT: Plan 10-01 (autonomous) CREATES this script but does NOT execute
 # the live SSH probes — those require live infra credentials and operator
@@ -254,6 +261,45 @@ else
   append_capacity ""
   append_capacity "**FALLBACK REQUIRED:** switch traefik-internal to dual-provider — add \`--providers.docker=true\` alongside \`--providers.docker.swarmMode=true\` per RESEARCH Open Question 2 option B. Plan 10-02 cannot proceed until operator remediates."
   exit 3
+fi
+append_capacity ""
+
+# --- 4b) Dashboard health probe (Phase 11 Plan 11-05 — Gemini suggestion) ---
+# Endpoint chosen: /api/auth/ok — Better Auth's built-in HIDE_METADATA health
+# route (verified 2026-05-27 against better-auth ~1.4.18 source at
+# node_modules/better-auth/dist/api/routes/ok.mjs:4-25; returns {"ok": true}
+# with HTTP 200 when the auth handler is reachable). Fallback list if the
+# installed Better Auth version drops /ok in a future major: /api/auth/get-session
+# (anonymous returns 200 with null body), /health, root /. The dashboard
+# at /api/auth/[...all]/route.ts (toNextJsHandler(auth)) mounts the catch-all.
+# Fail-fast on non-200 so an SSO hardening regression cannot silently break
+# the operator-facing dashboard surface during prod deploy preflight.
+log_section "4b) Dashboard health probe"
+append_capacity ""
+append_capacity "## 4b) Dashboard health probe"
+append_capacity ""
+
+DASHBOARD_HEALTH_URL=${DASHBOARD_HEALTH_URL:-https://ai-dashboard.converse-ai.app/api/auth/ok}
+log "probing dashboard health: $DASHBOARD_HEALTH_URL"
+
+if DASHBOARD_HTTP_CODE=$(curl -fs -o /tmp/dashboard-health-status -w "%{http_code}" \
+      --max-time 15 "$DASHBOARD_HEALTH_URL" 2>&1); then
+  if [ "$DASHBOARD_HTTP_CODE" = "200" ]; then
+    log "PASS — dashboard health OK ($DASHBOARD_HTTP_CODE) at $DASHBOARD_HEALTH_URL"
+    append_capacity '\`\`\`'
+    append_capacity "curl -fs $DASHBOARD_HEALTH_URL → $DASHBOARD_HTTP_CODE"
+    append_capacity '\`\`\`'
+    append_capacity ""
+    append_capacity "**Status:** PASS — dashboard /api/auth/ok returned 200"
+  else
+    log "FATAL — dashboard health probe returned non-200: $DASHBOARD_HTTP_CODE at $DASHBOARD_HEALTH_URL"
+    append_capacity "**Status:** FATAL — dashboard returned ${DASHBOARD_HTTP_CODE} (expected 200) at ${DASHBOARD_HEALTH_URL}"
+    exit 5
+  fi
+else
+  log "FATAL — dashboard health probe failed (curl error) for $DASHBOARD_HEALTH_URL: $DASHBOARD_HTTP_CODE"
+  append_capacity "**Status:** FATAL — dashboard health probe failed for ${DASHBOARD_HEALTH_URL} (curl error: ${DASHBOARD_HTTP_CODE})"
+  exit 5
 fi
 append_capacity ""
 
