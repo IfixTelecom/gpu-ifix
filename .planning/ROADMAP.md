@@ -46,7 +46,7 @@ Plans:
 **Goal:** Endurecer prod pós-Phase 10 — PRD-01 load test 30min sustained com SLO v1.0 D-04, PRD-02 chaos primary kill (Vast API DELETE), PRD-03 chaos OpenRouter DROP egress (iptables on n8n-ia-vm), PRD-04 RUNBOOK-INCIDENTS.md (4 classes D-11) + POSTMORTEM-TEMPLATE.md (Google SRE blameless 9-section), PRD-05 LGPD signoff doc-only deliverables, PRD-06 dashboard SSO hardening (better-auth twoFactor + rateLimit + allowlist + session 30min). Fold Phase 10 deferred items (D-18.1..D-18.4) e separação per-env keys (D-19).
 **Requirements:** PRD-01, PRD-02, PRD-03, PRD-04 (full), PRD-05, PRD-06
 **Depends on:** Phase 10
-**Plans:** 10 plans
+**Plans:** 0/10 plans complete
 
 Plans:
 
