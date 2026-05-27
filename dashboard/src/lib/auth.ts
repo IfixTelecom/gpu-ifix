@@ -116,6 +116,28 @@ export const auth = betterAuth({
         },
       },
     },
+    // [reviews HIGH #2 Option B fallback]: Better Auth twoFactor plugin
+    // verify-totp endpoint creates a new session row when 2FA challenge
+    // completes, but does NOT set our custom `twoFactorVerified` field
+    // (additionalFields contract). Without this hook the middleware
+    // loops back to /2fa/challenge after a successful TOTP verify. We
+    // hook session.create.before and infer "session created from 2FA
+    // challenge verify" by request URL — when path contains
+    // /two-factor/verify-totp, the user just passed the challenge.
+    session: {
+      create: {
+        before: async (session, context) => {
+          const path = (context as { path?: string } | null)?.path ?? "";
+          const fromChallenge =
+            path === "/two-factor/verify-totp" ||
+            path === "/two-factor/verify-backup-code";
+          if (fromChallenge) {
+            return { data: { ...session, twoFactorVerified: true } };
+          }
+          return { data: session };
+        },
+      },
+    },
   },
   advanced: { database: { generateId: () => crypto.randomUUID() } },
 });
