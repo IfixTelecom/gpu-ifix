@@ -126,10 +126,27 @@ type Querier interface {
 	// gets corrupted. MUST NOT be called on the request hot path — 02-03 Verify
 	// uses GetActiveKeyByLookupHash exclusively.
 	ListActiveKeysAll(ctx context.Context) ([]ListActiveKeysAllRow, error)
+	// Phase 11 Plan 04 D-18.3 — diagnostic-only operator surface for
+	// `gatewayctl key list` (no tenant filter). NOT used on the request hot
+	// path; the hot path remains GetActiveKeyByLookupHash. Projects only
+	// operator-safe metadata columns: never key_hash and never
+	// key_lookup_hash, so a captured stdout cannot leak secret material
+	// (threat T-11-OPS-02). The JOIN against ai_gateway.tenants exposes the
+	// human-readable slug so operators can read the table without UUID
+	// lookups during incident triage. Ordered by (slug, last_used_at DESC)
+	// so the most recently active keys per tenant surface at the top of
+	// each tenant group.
+	ListActiveKeysAllWithMeta(ctx context.Context) ([]ListActiveKeysAllWithMetaRow, error)
 	// Diagnostic / admin-surface query. NOT used on the hot request path — hot
 	// path uses GetActiveKeyByLookupHash, which hits the UNIQUE index and returns
 	// at most one row (Codex review [HIGH] 02-03).
 	ListActiveKeysByTenant(ctx context.Context, tenantID uuid.UUID) ([]ListActiveKeysByTenantRow, error)
+	// Phase 11 Plan 04 D-18.3 — diagnostic-only operator surface for
+	// `gatewayctl key list --tenant <uuid>`. Tenant-filtered companion of
+	// ListActiveKeysAllWithMeta with the same operator-safe projection
+	// (never key_hash, never key_lookup_hash). NOT used on the request hot
+	// path.
+	ListActiveKeysByTenantWithMeta(ctx context.Context, tenantID uuid.UUID) ([]ListActiveKeysByTenantWithMetaRow, error)
 	// Hot-path: load all currently-active prices at boot and on NOTIFY prices_changed.
 	ListActivePrices(ctx context.Context) ([]AiGatewayPrice, error)
 	ListAdminKeys(ctx context.Context) ([]ListAdminKeysRow, error)

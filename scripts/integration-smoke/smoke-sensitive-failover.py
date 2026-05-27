@@ -7,6 +7,31 @@ envelope — it is NEVER proxied to OpenAI/OpenRouter, an `audit_log` row record
 the decision (`upstream='blocked_sensitive'`), and ZERO `audit_log_content` rows
 are persisted (D-B2 — sensitive content is never stored).
 
+Environment overrides (Phase 11 Plan 04 reviews MEDIUM #3 — no hard-coded host):
+    GATEWAYCTL_PATH       Absolute path to the gatewayctl binary inside the
+                          target container. Default: /gatewayctl
+    GATEWAYCTL_CONTAINER  Docker container name housing the gateway + gatewayctl.
+                          Default: ifix-ai-gateway
+    GATEWAYCTL_SSH_HOST   Optional SSH alias used to wrap the docker exec call
+                          when the smoke runs from a control-plane host. Empty
+                          (default) = run docker exec locally on this host.
+
+Example invocations:
+    # 1) Default — local docker exec on this host:
+    python smoke-sensitive-failover.py \\
+        --gateway-url https://ai-gateway.converse-ai.app \\
+        --induce-failure-via gatewayctl ...
+    #    -> docker exec ifix-ai-gateway /gatewayctl breaker force-open ...
+
+    # 2) From ops-claude against the prod gateway VM n8n-ia-vm:
+    GATEWAYCTL_SSH_HOST=n8n-ia-vm \\
+        python smoke-sensitive-failover.py ...
+    #    -> ssh n8n-ia-vm docker exec ifix-ai-gateway /gatewayctl breaker ...
+
+    # 3) Custom binary path (e.g. testing a built-from-source gatewayctl):
+    GATEWAYCTL_PATH=/usr/local/bin/gatewayctl \\
+        python smoke-sensitive-failover.py ...
+
 This is the SC1 verification artifact for INT-03 (Telefonia sensitive call-audio)
 and the sensitive half of INT-04 (Cobranças sensitive). It composes two analogs:
 the `smoke-chat-ifix.py` script skeleton (CLI, config, report-write, exit-code
@@ -114,6 +139,29 @@ SENSITIVE_ENVELOPE_CODE = "upstream_unavailable_for_sensitive_tenant"
 # (Go const audit.UpstreamBlockedSensitive). Its presence in audit_log IS the
 # black-box proof the request never went external.
 AUDIT_UPSTREAM_BLOCKED = "blocked_sensitive"
+
+# Phase 11 Plan 04 D-18.1 + Pitfall 8: the set of breaker states that the
+# polling loop accepts as equivalent to natural-open. `forced-open` /
+# `FORCED_OPEN` are emitted by `gatewayctl breaker force-open` (Phase 06.9
+# Plan 04, gateway/cmd/gatewayctl/breaker.go:117); the gateway's
+# /v1/health/upstreams aggregator surfaces them under the same `state`
+# field. `closed` and `half-open` MUST NEVER be in this set — a healthy
+# upstream cannot satisfy the induced-failure pre-condition.
+OPEN_LIKE_STATES = frozenset({"open", "forced-open", "FORCED_OPEN"})
+
+# Defensive whitelist invariant — fail at module-load if a future edit
+# accidentally relaxes the membership. closed/half-open are PASS states
+# for a HEALTHY upstream and must never be classified as "tripped".
+assert "closed" not in OPEN_LIKE_STATES, "closed is healthy, must not be in OPEN_LIKE_STATES"
+assert "half-open" not in OPEN_LIKE_STATES, "half-open is recovering, must not be in OPEN_LIKE_STATES"
+
+# Phase 11 Plan 04 reviews MEDIUM #3 — env-driven parameterization so the
+# script is not hard-coded to one host. Defaults exercise the most common
+# case (local docker exec on the gateway VM). See module docstring for
+# the example invocations.
+GATEWAYCTL_PATH = os.environ.get("GATEWAYCTL_PATH", "/gatewayctl")
+GATEWAYCTL_CONTAINER = os.environ.get("GATEWAYCTL_CONTAINER", "ifix-ai-gateway")
+GATEWAYCTL_SSH_HOST = os.environ.get("GATEWAYCTL_SSH_HOST", "")  # empty = local docker exec
 
 # Expected Retry-After header value on the 503 (sensitive_block_test.go:110-112).
 EXPECTED_RETRY_AFTER = "30"
@@ -266,7 +314,12 @@ async def ensure_tier0_open(client: httpx.AsyncClient, gateway_url: str) -> dict
             ups = body.get("upstreams", {})
             entry = ups.get(TIER0_UPSTREAM_NAME, {})
             last_state = entry.get("state", "unknown")
-            if last_state == "open":
+            # Phase 11 D-18.1: accept the FORCED_OPEN / forced-open variants
+            # emitted by `gatewayctl breaker force-open` as equivalent to a
+            # natural-open transition. Pitfall 8: never widen this whitelist
+            # to include "closed" or "half-open" (a healthy upstream cannot
+            # satisfy the induced-failure pre-condition).
+            if last_state in OPEN_LIKE_STATES:
                 return {"opened": True, "last_state": last_state, "error": None}
         except Exception as e:  # network / JSON error — keep polling, record last
             last_error = str(e)[:300]
@@ -305,25 +358,89 @@ def print_operator_prestep(gateway_url: str) -> None:
 
 
 def induce_failure_via_gatewayctl(gatewayctl_path: str) -> dict[str, Any]:
-    """`gatewayctl` mode: there is NO breaker force-open subcommand.
+    """`gatewayctl` mode: invoke `gatewayctl breaker force-open` to trip the
+    tier-0 LLM breaker (Phase 11 Plan 04 D-18.1).
 
-    Inspected gateway/cmd/gatewayctl/ — `upstreams` has list/update/enable/
-    disable only, no breaker force-open. So this mode errors out telling the
-    operator to use operator-prestep. Kept as an explicit branch so the CLI
-    contract (`--induce-failure-via {operator-prestep,gatewayctl}`) is honest
-    rather than silently falling through.
+    The `gatewayctl breaker force-open` subcommand landed in Phase 06.9 Plan
+    04 at gateway/cmd/gatewayctl/breaker.go:117 — it writes the
+    `gw:breaker:force:local-llm` Redis key with TTL and an audit_log row
+    (`event_kind=breaker_force_open`). The polling loop in ensure_tier0_open
+    accepts the resulting `FORCED_OPEN` state via OPEN_LIKE_STATES (D-18.1).
 
-    Returns {ok: False, error: str}.
+    Parameterization (reviews MEDIUM #3): no hard-coded host. The script
+    builds the command from three module-level env-driven constants:
+      - GATEWAYCTL_PATH       (default: /gatewayctl)
+      - GATEWAYCTL_CONTAINER  (default: ifix-ai-gateway)
+      - GATEWAYCTL_SSH_HOST   (default: "" — local docker exec)
+    `gatewayctl_path` (the legacy positional arg from the --gatewayctl CLI
+    flag) is honored only when GATEWAYCTL_PATH was not overridden via env.
+    When `GATEWAYCTL_SSH_HOST` is non-empty the command is wrapped in
+    `ssh <host> docker exec ...` so the smoke can run from a control plane
+    against any target without code edits.
+
+    Returns {ok: bool, error: str|None, stdout: str, stderr: str}.
     """
+    # Honor the legacy --gatewayctl CLI flag UNLESS the env var was set
+    # explicitly. The env var takes precedence so a docker-exec context
+    # with a non-default binary path can override at invocation time.
+    binary_path = (
+        GATEWAYCTL_PATH
+        if os.environ.get("GATEWAYCTL_PATH")
+        else (gatewayctl_path or GATEWAYCTL_PATH)
+    )
+
+    docker_exec_cmd = [
+        "docker", "exec", GATEWAYCTL_CONTAINER, binary_path,
+        "breaker", "force-open",
+        "--upstream=local-llm",
+        "--ttl=300s",
+    ]
+    if GATEWAYCTL_SSH_HOST:
+        cmd: list[str] = ["ssh", GATEWAYCTL_SSH_HOST] + docker_exec_cmd
+    else:
+        cmd = docker_exec_cmd
+
+    log.info(
+        "induce_failure_via_gatewayctl: invoking breaker force-open",
+        ssh_host=GATEWAYCTL_SSH_HOST or "(local)",
+        container=GATEWAYCTL_CONTAINER,
+        binary=binary_path,
+    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return {
+            "ok": False,
+            "error": f"gatewayctl invocation failed: {str(e)[:300]}",
+            "stdout": "",
+            "stderr": "",
+        }
+
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "error": (
+                f"gatewayctl breaker force-open exited {result.returncode}: "
+                f"{result.stderr[:300]}"
+            ),
+            "stdout": result.stdout[:500],
+            "stderr": result.stderr[:500],
+        }
+    log.info(
+        "induce_failure_via_gatewayctl: breaker force-open ok",
+        stdout=result.stdout.strip()[:200],
+    )
     return {
-        "ok": False,
-        "error": (
-            "--induce-failure-via gatewayctl is not supported: gatewayctl has "
-            "no breaker force-open subcommand (gateway/cmd/gatewayctl/upstreams.go "
-            "exposes only list/update/enable/disable). Re-run with "
-            "--induce-failure-via operator-prestep (the default) and follow the "
-            "printed pre-step."
-        ),
+        "ok": True,
+        "error": None,
+        "stdout": result.stdout[:500],
+        "stderr": result.stderr[:500],
     }
 
 
