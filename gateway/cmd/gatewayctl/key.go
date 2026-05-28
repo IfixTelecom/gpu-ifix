@@ -37,7 +37,13 @@ func runKey(ctx context.Context, args []string, log *slog.Logger) int {
 }
 
 func runKeyCreate(ctx context.Context, args []string, log *slog.Logger) int {
-	fs := flag.NewFlagSet("key create", flag.ExitOnError)
+	// WR-05: use ContinueOnError + explicit return 2 to honor the Pattern
+	// D `return int` contract. flag.ExitOnError would os.Exit(2) directly
+	// on parse error, terminating any test process invoking runCmd with
+	// bad flags AND deviating from the runKeyList / runDebug behavior in
+	// the same binary.
+	fs := flag.NewFlagSet("key create", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
 	tenantSlug := fs.String("tenant", "", "tenant slug (required)")
 	dataClass := fs.String("data-class", "normal", "normal | sensitive")
 	if err := fs.Parse(args); err != nil {
@@ -103,7 +109,9 @@ func runKeyCreate(ctx context.Context, args []string, log *slog.Logger) int {
 }
 
 func runKeyRevoke(ctx context.Context, args []string, log *slog.Logger) int {
-	fs := flag.NewFlagSet("key revoke", flag.ExitOnError)
+	// WR-05: see runKeyCreate.
+	fs := flag.NewFlagSet("key revoke", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
