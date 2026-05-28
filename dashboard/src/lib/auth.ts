@@ -71,6 +71,16 @@ export const auth = betterAuth({
   session: {
     expiresIn: 30 * 60,
     updateAge: 5 * 60,
+    // WR-01: cookieCache.maxAge=60 means the middleware reads
+    // twoFactorVerified from the signed cookie for up to 60 seconds
+    // without consulting the DB. After an operator revokes a session
+    // (`DELETE FROM session WHERE id = ...`) OR after a TOTP reset via
+    // RUNBOOK-2FA-RECOVERY.md, that change does NOT propagate to active
+    // middleware decisions for up to 60s. For a 4-admin internal panel
+    // this trade-off is acceptable; runbook ops MUST wait 60s after
+    // session revocation before assuming the operator is locked out.
+    // See gateway/docs/RUNBOOK-INCIDENTS.md class 4 + RUNBOOK-2FA-
+    // RECOVERY.md for the operator workflow.
     cookieCache: { enabled: true, maxAge: 60 },
     additionalFields: {
       twoFactorVerified: {
