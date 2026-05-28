@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-05-28T01:46:15.245Z"
+last_updated: "2026-05-28T20:50:00.000Z"
 progress:
   total_phases: 4
   completed_phases: 3
@@ -27,9 +27,9 @@ progress:
 
 ## Current Position
 
-Phase: 11
-Plan: Not started
-Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questions in ROADMAP: embed CPU host, TTS server shim vs community wrapper, voice-cloning workflow, tts tier-0 role). Engine decided: Kani-TTS-2-pt (Apache 2.0, PT-BR, 3 GB VRAM, zero-shot voice clone).
+Phase: 11 (closed `passed_partial` 2026-05-28T01:42Z; addendum closure 2026-05-28T20:48Z — PRD-03 flipped to `passed` after audit-pipeline 5-PR chain)
+Plan: All 10 plans landed
+Next autonomous-eligible work: 11-06 + 11-07 live UATs (primary reconciler unblocked via quick 260527-wgs); milestone v1 closure decision pending operator review.
 
 - **Phases 1–5:** COMPLETE on disk (all autonomous plans + VERIFICATION). Each carries a `human_needed` / `passed_partial` live-UAT deferral — the standard pattern when the dev stack is not yet deployed:
   - Phase 1: smoke.yml Vast.ai HUMAN-UAT pending
