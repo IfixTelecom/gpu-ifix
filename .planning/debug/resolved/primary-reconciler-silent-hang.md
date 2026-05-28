@@ -1,6 +1,6 @@
 ---
 slug: primary-reconciler-silent-hang
-status: root_cause_found
+status: resolved
 goal: find_root_cause_only
 tdd_mode: false
 trigger: phase-11-uat-2026-05-27
