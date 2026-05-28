@@ -18,10 +18,16 @@
  * wires.
  *
  * If `getCookieCache` returns null (cache stale or absent — e.g. just
- * after sign-in before the first cookieCache write), we conservatively
- * treat as session-present-but-unverified and route to /2fa/challenge.
- * This is safe: the challenge page itself runs through this matcher
- * exclusion (see `config.matcher` below) so we cannot loop.
+ * after sign-in before the first cookieCache write), we PESSIMISTICALLY
+ * treat as session-present, 2FA-enrolled, but NOT verified — routing to
+ * /2fa/challenge (NOT /2fa/enroll). See CR-01: routing to /2fa/enroll
+ * exposes a credential-rotation primitive because
+ * `authClient.twoFactor.enable` will overwrite a real TOTP secret +
+ * backup codes for an already-enrolled user. A user who is genuinely
+ * unenrolled who lands on /2fa/challenge will see a clear "two-factor
+ * not enabled" error from the verify endpoint — a safe failure mode.
+ * This is loop-safe: the challenge page itself is excluded by
+ * `config.matcher` below.
  *
  * Matcher exclusions (UI-SPEC v2 §Anchors): login, signup, 2fa, first-login,
  * signed-out, api/auth, _next, favicon.
@@ -35,9 +41,10 @@ import { type NextRequest, NextResponse } from "next/server";
  *   - { hasSession: false } when no session cookie present.
  *   - { hasSession: true, twoFactorEnabled, twoFactorVerified } when the
  *     cookieCache payload was successfully decoded.
- *   - { hasSession: true, twoFactorEnabled: false, twoFactorVerified: false }
+ *   - { hasSession: true, twoFactorEnabled: true, twoFactorVerified: false }
  *     when the session cookie exists but cookieCache is missing/stale —
- *     we conservatively route through enroll/challenge gates.
+ *     PESSIMISTIC fallback per CR-01: pretend enrolled to force /2fa/challenge
+ *     rather than /2fa/enroll (which would overwrite TOTP on the real user).
  */
 async function readTwoFactorClaims(req: NextRequest): Promise<{
   hasSession: boolean;
@@ -55,11 +62,18 @@ async function readTwoFactorClaims(req: NextRequest): Promise<{
 
   const cache = await getCookieCache(req);
   if (!cache || !cache.session || !cache.user) {
-    // Cookie cache stale/absent — treat as session-present-but-unverified.
-    // Routes to enroll first (the more conservative gate).
+    // Cookie cache stale/absent (post-redeploy, post-secret-rotation, or the
+    // 60s cookieCache miss window) — we cannot consult the DB from Edge, so
+    // we PESSIMISTICALLY treat the user as enrolled-but-unverified. This
+    // routes to /2fa/challenge (NOT /2fa/enroll). See CR-01: routing to
+    // /2fa/enroll would let an attacker with a stolen session cookie reset
+    // the legitimate user's TOTP secret + backup codes via
+    // authClient.twoFactor.enable. A user who is genuinely not enrolled and
+    // hits /2fa/challenge will receive a clear "two-factor not enabled"
+    // error from the verify endpoint — safe failure mode.
     return {
       hasSession: true,
-      twoFactorEnabled: false,
+      twoFactorEnabled: true,
       twoFactorVerified: false,
     };
   }

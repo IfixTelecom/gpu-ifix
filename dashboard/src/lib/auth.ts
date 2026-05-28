@@ -40,6 +40,7 @@
  */
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { twoFactor } from "better-auth/plugins";
 import { isAllowedEmail } from "./allowlist";
 import { db, schema } from "./db"; // dashboard's OWN db, NOT ai_gateway
@@ -94,6 +95,36 @@ export const auth = betterAuth({
       "/sign-up/email": { window: 900, max: 5 },
       "/two-factor/verify-totp": { window: 60, max: 5 },
     },
+  },
+  // CR-01 defense-in-depth: reject /two-factor/enable when the caller's
+  // user already has two_factor enabled. authClient.twoFactor.enable is
+  // implemented as "issue-and-replace" by Better Auth — it overwrites
+  // the existing TOTP secret + backup codes. An attacker with a valid
+  // session cookie (XSS, stolen-laptop, MITM during the 60s cookieCache
+  // miss window) + the user's password could otherwise rotate the
+  // legitimate user's credentials and lock them out. We require an
+  // operator-mediated reset via RUNBOOK-2FA-RECOVERY.md before any
+  // re-enrollment.
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/two-factor/enable") {
+        return;
+      }
+      // Pull the session from the request — the enable endpoint also
+      // requires a session, but we read here so we can inspect
+      // user.twoFactorEnabled BEFORE the plugin overwrites the secret.
+      const session = await getSessionFromCtx(ctx).catch(() => null);
+      const enabled =
+        (session as { user?: { twoFactorEnabled?: boolean } } | null)?.user
+          ?.twoFactorEnabled === true;
+      if (enabled) {
+        throw new APIError("FORBIDDEN", {
+          message:
+            "two-factor já está habilitado neste usuário. Para rotacionar, execute o procedimento RUNBOOK-2FA-RECOVERY.md (audit-logged, separação-de-deveres).",
+          code: "TWO_FACTOR_ALREADY_ENABLED",
+        });
+      }
+    }),
   },
   // D-12: mandatory TOTP. issuer string locked per CONTEXT.md specifics
   // (line 159). SHA-1 default per @better-auth/utils/dist/otp.mjs:12 —
