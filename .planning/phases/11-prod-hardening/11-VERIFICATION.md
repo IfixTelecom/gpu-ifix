@@ -3,6 +3,16 @@ phase: 11
 slug: prod-hardening
 status: passed_partial
 closed_at: 2026-05-28T01:42Z
+addendum_closed_at: 2026-05-28T20:48Z
+addendum_summary: |
+  PRD-03 flipped passed_partial → passed after live smoke 4/4 GREEN
+  validation of the audit-pipeline upstream='blocked_sensitive' label
+  on the RES-08 503 path (5-PR chain landed this session: #8 fdc44cf,
+  #9 23bbe01, #11 7d0b345+2d30a60, #12 1365b75, #13 bdd29b4).
+  Overall phase stays passed_partial — PRD-01 (load-test 30-min
+  sustained) and PRD-02 (Vast DELETE chaos) remain deferred to live
+  UAT (primary reconciler unblocked via quick 260527-wgs but live
+  exec not yet run).
 spend_total_usd: 0.04
 operator: pedro (orchestrator-driven)
 plans_total: 10
@@ -15,21 +25,29 @@ status_flip_rationale: |
   6/10 plans GREEN with full artifacts (11-01, 11-02, 11-03, 11-04, 11-05, 11-09);
   11-06 BLOCKED on primary reconciler silent-hang tech debt (infrastructure
   shipped via 11-01); 11-07 script shipped + live exec deferred (depends_on
-  11-06); 11-08 LIVE Segment A PASSED 3/3 RES-08 gates, Segment B 2/4 (audit
-  pipeline pre-existing critical bug surfaced); 11-10 (this plan) ships UAT
-  sheet + VERIFICATION + advances STATE to passed_partial. Phase 11 GOAL
-  achieved at the artifact level (load-test infrastructure + dashboard SSO +
-  LGPD docs + Phase 10 fold + per-env keys + RUNBOOK-INCIDENTS suite live);
-  3 live UATs remain (11-06 + 11-07 + 11-08 Segment B audit_decision/never_external
-  label gate). Tech-debt resolutions in-session: primary reconciler silent-hang
-  RESOLVED via quick 260527-wgs (commit 01e7558); audit-pipeline-silent claim
-  REFUTED as diagnostic target mismatch (correct DB is `bd_ai_gateway_prod`,
-  not legacy `bd_ai_gateway`). Remaining open: single medium-severity audit
-  label gap (`upstream='blocked_sensitive'` on RES-08 503 path, ~3 LOC fix).
+  11-06); 11-08 LIVE Segment A PASSED 3/3 RES-08 gates, Segment B initially
+  2/4 (audit pipeline label gap surfaced); 11-10 (this plan) ships UAT
+  sheet + VERIFICATION + advances STATE. Phase 11 GOAL achieved at the
+  artifact level (load-test infrastructure + dashboard SSO + LGPD docs +
+  Phase 10 fold + per-env keys + RUNBOOK-INCIDENTS suite live).
+  Tech-debt resolutions in-session:
+  (a) primary reconciler silent-hang RESOLVED via quick 260527-wgs
+      (commit 01e7558);
+  (b) audit-pipeline-silent claim REFUTED as diagnostic target mismatch
+      (correct DB is `bd_ai_gateway_prod`, not legacy `bd_ai_gateway`);
+  (c) audit `upstream='blocked_sensitive'` label gap on RES-08 503 path
+      RESOLVED 2026-05-28T20:48Z via 5-PR chain (#8 fdc44cf, #9 23bbe01,
+      #11 7d0b345+2d30a60, #12 1365b75, #13 bdd29b4) — live smoke 4/4
+      GREEN, audit_upstream='blocked_sensitive' confirmed in
+      bd_ai_gateway_prod for both streaming + non-streaming sensitive paths
+      — flipped PRD-03 from passed_partial to passed.
+  Remaining 2 live UATs (11-06 30-min sustained + 11-07 Vast DELETE chaos)
+  stay deferred — primary reconciler tech debt is unblocked but live UAT
+  not yet executed in this session.
 prds_status:
   PRD-01: passed_partial   # infra shipped (11-01); 30-min sustained live UAT deferred (11-06 blocked)
   PRD-02: passed_partial   # chaos script shipped (11-07); live exec deferred (depends_on 11-06)
-  PRD-03: passed_partial   # Segment A LIVE PASS 3/3 (11-08); Segment B 2/4 (audit gate failure)
+  PRD-03: passed           # Segment A LIVE PASS 3/3 (11-08); Segment B 4/4 PASS 2026-05-28T20:48Z post-audit-pipeline closure (5 PRs #8/#9/#11/#12/#13)
   PRD-04: passed           # RUNBOOK-INCIDENTS + POSTMORTEM-TEMPLATE + RUNBOOK-2FA-RECOVERY (11-09)
   PRD-05: passed           # LGPD-SIGNOFF-PROCESS + LGPD-SIGNOFF-LETTER-TEMPLATE (11-03)
   PRD-06: passed           # dashboard 2FA + rate-limit + allowlist + session 30min (11-02) — staging smoke green; CR-01..CR-04 critical fixes merged
@@ -74,22 +92,43 @@ carry_forward_tech_debt:
   - id: audit-blocked-sensitive-upstream-label-missing
     severity: ~~medium~~ resolved
     resolved_in_session: true
-    resolved_at: 2026-05-28T03:15Z
-    resolved_via: commit 7814678 (gateway/internal/schedule/middleware.go)
+    resolved_at: 2026-05-28T20:48Z
+    resolved_via: |
+      5 PRs chained, validated end-to-end by smoke 4/4 GREEN:
+      - PR #8 / commit fdc44cf — shed.trackAndPass in-place mutation
+      - PR #9 / commit 23bbe01 — schedule:115 + shed:150 in-place mutation
+      - PR #11 / commits 7d0b345 + 2d30a60 — SEED-005 (breaker.EffectiveStateSnapshot) + SEED-006 (smoke query_audit poll loop)
+      - PR #12 / commit 1365b75 — proxy/sensitive.go SensitiveRetry honors EffectiveState
+      - PR #13 / commit bdd29b4 — seeds marked shipped
     surfaced_by: 11-08-EVIDENCE.md (Segment B re-run with correct DSN)
-    fix_target: gateway/internal/schedule/middleware.go sensitive-peak short-circuit
-    blocks: ~~[11-08 Segment B audit_decision + never_external gates (2/4)]~~ (unblocked post-deploy)
+    fix_target: |
+      gateway/internal/audit chain (audit→shed→dispatcher in-place mutation
+      contract); gateway/internal/breaker (Snapshot vs EffectiveState);
+      gateway/internal/proxy/sensitive.go (SensitiveRetry); scripts/integration-smoke
+      (audit-DB poll loop).
+    blocks: ~~[11-08 Segment B audit_decision + never_external gates (2/4)]~~ (CLOSED 2026-05-28T20:48Z — smoke 4/4 GREEN against prod gateway image sha256:e7dd5e27)
     summary: |
-      Phase 3 dispatcher's writeSensitiveBlock at dispatcher.go:365 set the
-      override correctly, but schedule.Middleware short-circuited BEFORE the
-      dispatcher ran (sensitive tenant + peak external override → 503 envelope
-      WITHOUT calling auditctx.WithUpstreamOverride). Result: audit row
-      recorded route-default upstream='llm' instead of 'blocked_sensitive'.
-      Fix: 3 LOC — mirror the dispatcher pattern in schedule/middleware.go
-      before WriteOpenAIError+return. go vet + go build + go test
-      ./internal/schedule/ all clean. Re-run smoke-sensitive-failover.py
-      against bd_ai_gateway_prod after the new image lands on n8n-ia-vm
-      → expect 4/4 PASS without source change to the smoke.
+      Initial fix attempt 2026-05-28T03:15Z (commit 7814678 — schedule middleware
+      sensitive-peak short-circuit) was correct but UNREACHABLE from the smoke:
+      the smoke tenant does not exercise the peak-window branch. Diagnostic
+      re-investigation 2026-05-28T18:00Z (debug session
+      .planning/debug/audit-blocked-sensitive-override-not-propagated.md)
+      identified the actual root cause: audit.Middleware captures r₀ but
+      shed/schedule/idempotency middlewares interposed fresh *http.Request
+      pointers via r.WithContext(ctx) — Go's (*Request).WithContext ALWAYS
+      allocates a new *Request — so dispatcher.writeSensitiveBlock's
+      `*r = *r.WithContext(auditctx.WithUpstreamOverride(...))` mutated an
+      orphan pointer audit.Middleware never read. Fix sequence applied
+      in-place mutation pattern (`*r = *r.WithContext(ctx); next.ServeHTTP(w, r)`)
+      to all interposition sites + fixed two sibling EffectiveState-vs-State
+      bugs surfaced by the audit-pipeline now actually exercising the path
+      (breaker.Snapshot for health endpoint, SensitiveRetry for non-streaming
+      sensitive path). All four bugs documented in 2 seeds (SEED-005, SEED-006)
+      promoted via 2 quick tasks (260528-h12, 260528-h8z). Live smoke
+      validation 2026-05-28T20:48Z UTC returned `all_passed: True` with
+      `audit_upstream='blocked_sensitive'` confirmed in
+      `bd_ai_gateway_prod.ai_gateway.audit_log` for request_ids
+      019e7008-3e43 (streaming) + the non-streaming counterpart.
   - id: phase-067-env-drift-n8n-ia-vm
     severity: high
     resolved_in_session: true
@@ -195,7 +234,7 @@ verified via sanitized diff.
 |-----|--------|---------|----------|
 | PRD-01 (load test 30min sustained + SLO v1.0) | passed_partial | 11-01, 11-06 | Infrastructure shipped (audit-log-export.py + load-replay.py + load-replay-report-schema.json + .gitignore); live 30-min sustained UAT deferred — see `11-06-EVIDENCE.md` (BLOCKED on primary reconciler silent-hang) |
 | PRD-02 (chaos primary kill — Vast API DELETE) | passed_partial | 11-07 | `scripts/chaos/vast-delete.sh` shipped (0755, bash -n clean, reviews-folded contract); live UAT deferred (depends_on 11-06) — see `11-07-EVIDENCE.md` |
-| PRD-03 (chaos OpenRouter DROP egress) | passed_partial | 11-08 | `scripts/chaos/openrouter-iptables-drop.sh` shipped (netns-scoped, host sha256 equality verified); LIVE Segment A 3/3 PASS (natural breaker open + sensitive 503 RES-08 + zero 5xx panic + zero 502); LIVE Segment B 2/4 PASS (fail_closed + streaming_fail_fast PASS; audit_decision + never_external FAIL due to pre-existing audit-pipeline-silent bug since 2026-05-25, NOT Phase 11 regression) — see `11-08-EVIDENCE.md` |
+| PRD-03 (chaos OpenRouter DROP egress) | passed | 11-08 | `scripts/chaos/openrouter-iptables-drop.sh` shipped (netns-scoped, host sha256 equality verified); LIVE Segment A 3/3 PASS (natural breaker open + sensitive 503 RES-08 + zero 5xx panic + zero 502); LIVE Segment B 4/4 PASS 2026-05-28T20:48Z UTC after audit-pipeline closure (5-PR chain #8/#9/#11/#12/#13): fail_closed + streaming_fail_fast + audit_decision + never_external all GREEN; audit_upstream='blocked_sensitive' confirmed in bd_ai_gateway_prod — see `11-08-EVIDENCE.md` + `.planning/debug/audit-blocked-sensitive-override-not-propagated.md` |
 | PRD-04 full (incident runbook + postmortem + 2FA recovery) | passed | 11-09 | `gateway/docs/RUNBOOK-INCIDENTS.md` (4 D-11 classes + Triagem entry-point + 8 sibling cross-refs + 2FA sub-class), `gateway/docs/POSTMORTEM-TEMPLATE.md` (Google SRE blameless 9-section), `gateway/docs/RUNBOOK-2FA-RECOVERY.md` (separation-of-duty + audit-row-before-SQL-UPDATE) — see `11-09-SUMMARY.md` (13/13 grep gates PASS) |
 | PRD-05 (LGPD doc-only deliverables) | passed | 11-03 | `gateway/docs/LGPD-SIGNOFF-PROCESS.md` + `gateway/docs/LGPD-SIGNOFF-LETTER-TEMPLATE.md` shipped; references 4 sub-processors (Vast.ai + OpenRouter + OpenAI + MinIO); evidence file convention `.planning/legal/lgpd-signoff-{YYYY-MM-DD}-{tenant}.pdf` (gitignored) |
 | PRD-06 (dashboard SSO hardening) | passed | 11-02 | `dashboard/src/lib/auth.ts` twoFactor + rateLimit + databaseHooks allowlist + session expiresIn=30min; 2FA UI pages (`/2fa/enroll`, `/2fa/challenge`, `/2fa/backup`); middleware two-stage 2FA gate; staging smoke green (see `11-02-staging-smoke.md`); prod migrate complete; CR-01..CR-04 critical fixes (`b786122`, `3825c81`, `d31abf7`, `5d210a7`) + WR-01..WR-09 warning fixes merged in this session |
