@@ -175,6 +175,15 @@ TIER0_UPSTREAM_NAME = "local-llm"
 INDUCE_POLL_TIMEOUT_S = 30.0
 INDUCE_POLL_INTERVAL_S = 2.0
 
+# SEED-006: the audit writer (gateway/internal/audit/writer.go) flushes on a
+# `flushBatchSize=500` / `flushInterval=1*time.Second` rule — whichever fires
+# first. A 2-request smoke never trips the batch threshold, so we MUST poll
+# past one full 1s flush cycle (plus DB write latency, with margin) before
+# declaring the audit row missing. Without this poll, a correctly-emitted
+# audit row produces a false RED gate on a passing RES-08 gateway.
+AUDIT_POLL_DEADLINE_S = 5.0
+AUDIT_POLL_INTERVAL_S = 0.25
+
 # streaming_fail_fast gate: sensitive + stream:true must 503 in under this
 # (sensitive_block_test.go:198-201, D-B4 — fail-fast pre-flight, no retry loop).
 STREAMING_FAIL_FAST_MAX_MS = 500
@@ -565,23 +574,12 @@ async def run_streaming_fail_fast_request(
 # --- Audit-DB gates -------------------------------------------------------
 
 
-def query_audit(pg_dsn: str, request_id: str) -> dict[str, Any]:
-    """Query ai_gateway.audit_log + audit_log_content for the request_id.
+def _query_audit_once(pg_dsn: str, request_id: str) -> dict[str, Any]:
+    """Single-shot audit-DB query — the inner loop body of `query_audit`.
 
-    The black-box equivalent of sensitive_block_test.go:126-148:
-      - audit_log.upstream MUST equal `blocked_sensitive` — this IS the proof
-        the request never reached an external provider (never_external gate)
-      - an audit_log row MUST exist for the request_id (audit_decision)
-      - COUNT(*) on audit_log_content MUST be 0 — D-B2, sensitive content is
-        never persisted (audit_decision)
-
-    Threat T-09-07: the audit_log_content query is `SELECT COUNT(*)` ONLY — it
-    NEVER selects content columns, so no sensitive prompt/response body is ever
-    pulled into this process. The DSN (threat T-09-09) is used here and is never
-    logged or written to the report.
-
-    Returns {ok, audit_log_row_found, audit_upstream, audit_log_content_rows,
-             error?}.
+    Returns the same dict shape as `query_audit`; the wrapper polls this until
+    the row appears, the deadline elapses, or a genuine connection error fires.
+    See `query_audit` for the gate-derivation contract.
     """
     result: dict[str, Any] = {
         "ok": False,
@@ -589,12 +587,6 @@ def query_audit(pg_dsn: str, request_id: str) -> dict[str, Any]:
         "audit_upstream": "",
         "audit_log_content_rows": -1,
     }
-    if not request_id:
-        result["error"] = (
-            "no X-Request-ID captured from the fail_closed request — cannot "
-            "correlate the audit_log row"
-        )
-        return result
     try:
         with psycopg.connect(pg_dsn, connect_timeout=10) as conn:
             with conn.cursor() as cur:
@@ -629,6 +621,66 @@ def query_audit(pg_dsn: str, request_id: str) -> dict[str, Any]:
         and result["audit_log_content_rows"] == 0
     )
     return result
+
+
+def query_audit(
+    pg_dsn: str,
+    request_id: str,
+    deadline_s: float = AUDIT_POLL_DEADLINE_S,
+    interval_s: float = AUDIT_POLL_INTERVAL_S,
+) -> dict[str, Any]:
+    """Query ai_gateway.audit_log + audit_log_content for the request_id.
+
+    The black-box equivalent of sensitive_block_test.go:126-148:
+      - audit_log.upstream MUST equal `blocked_sensitive` — this IS the proof
+        the request never reached an external provider (never_external gate)
+      - an audit_log row MUST exist for the request_id (audit_decision)
+      - COUNT(*) on audit_log_content MUST be 0 — D-B2, sensitive content is
+        never persisted (audit_decision)
+
+    Threat T-09-07: the audit_log_content query is `SELECT COUNT(*)` ONLY — it
+    NEVER selects content columns, so no sensitive prompt/response body is ever
+    pulled into this process. The DSN (threat T-09-09) is used here and is never
+    logged or written to the report.
+
+    SEED-006: the audit writer flushes on a 1s timer / 500-row batch rule
+    (gateway/internal/audit/writer.go). A 2-request smoke only lands rows via
+    the 1s timer, so a single-shot query ~280 ms after the request races the
+    flush and produces a false RED gate. We poll up to `deadline_s` (sized to
+    cover one full flush cycle plus DB write latency) at `interval_s` cadence.
+    Genuine connection errors short-circuit — they are NOT retried. A missing
+    request_id short-circuits BEFORE the loop so we do not waste 5s of retries
+    on a correlation-id we never had.
+
+    Returns {ok, audit_log_row_found, audit_upstream, audit_log_content_rows,
+             error?}.
+    """
+    if not request_id:
+        return {
+            "ok": False,
+            "audit_log_row_found": False,
+            "audit_upstream": "",
+            "audit_log_content_rows": -1,
+            "error": (
+                "no X-Request-ID captured from the fail_closed request — cannot "
+                "correlate the audit_log row"
+            ),
+        }
+
+    # Use time.monotonic() (not time.time()) so wall-clock jumps cannot break
+    # the deadline. `time` is already imported at module top.
+    end = time.monotonic() + deadline_s
+    while True:
+        result = _query_audit_once(pg_dsn, request_id)
+        if result["audit_log_row_found"]:
+            return result
+        if "error" in result:
+            # Genuine psycopg failure — fail fast, do not retry.
+            return result
+        if time.monotonic() >= end:
+            # Deadline elapsed; result["ok"] is False, gate fails honestly.
+            return result
+        time.sleep(interval_s)
 
 
 # --- Gates + exit codes ---------------------------------------------------
