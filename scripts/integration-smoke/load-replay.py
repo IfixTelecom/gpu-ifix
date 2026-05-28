@@ -406,8 +406,16 @@ async def replay_one(
             )
         status_code = r.status_code
         upstream = r.headers.get("X-Upstream") or None
-        error_class = _classify_error(BaseException(), status_code)
-    except BaseException as e:  # noqa: BLE001 — capture every transport failure
+        # WR-03: classify by status code directly on the success path —
+        # no exception happened, so feeding _classify_error a sentinel
+        # BaseException() was opaque. A 5xx response from the gateway
+        # still counts as ERROR_UPSTREAM_5XX; 2xx/4xx are clean.
+        error_class = ERROR_UPSTREAM_5XX if status_code >= 500 else None
+    except Exception as e:  # WR-03: NOT BaseException — preserve
+        # KeyboardInterrupt + SystemExit + GeneratorExit. Operator pressing
+        # Ctrl-C during a 30-min replay used to be absorbed here and
+        # recorded as a timeout; the script would only stop at the
+        # orchestrator signal layer. Catch only transport errors now.
         error_class = _classify_error(e, status_code) or ERROR_TIMEOUT
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
