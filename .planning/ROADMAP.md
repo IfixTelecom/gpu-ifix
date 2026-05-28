@@ -13,6 +13,62 @@ Plans:
 - [x] 06.8-04-PLAN.md — Wave 1: Fallback topology ladder runbook + per-shape env presets (2×3090 → 5090 → Shape C deferred)
 - [x] 06.8-05-PLAN.md — Wave 4 (gap closure): diagnose + fix the PRIMARY_VAST_MACHINE_ALLOWLIST steering bug (diagnose-first, operator-approval gate, minimal fix + unit test) → re-run 2×3090 force-up UAT targeting 43803 → markReady + STT 200 + nvidia-smi 2-GPU split
 
+### Phase 10: prod-deploy-ai-gateway
+
+**Goal:** First production deploy of the ifix-ai-gateway (gateway + dashboard) — operator-managed `docker compose` stack at /opt/ai-gateway-prod/ on n8n-ia-vm (VM 101), public hostnames ai-gateway.converse-ai.app + ai-dashboard.converse-ai.app served via edge Traefik on vps-ifix-vm, new Postgres prod databases bd_ai_gateway_prod + bd_ai_dashboard_prod, new Sentry project ifix-ai-gateway-prod, develop→main fast-forward, cut release v1.0.0, per-tenant golden-path smoke for the 6 client apps, cascade-close Phase 02/03/04/05 live-UAT deferrals.
+**Requirements:** INT-06, PRD-04 (partial), PRD-07
+<!-- PRD-04 (partial) = RUNBOOK-DEPLOY.md only per D-18; full incident runbook deferred to Phase 11. See REQUIREMENTS.md §Traceability for the partial/full split. -->
+**Depends on:** Phase 9
+**Plans:** 6/6 plans complete
+
+Plans:
+
+**Wave 1**
+
+- [x] 10-01-PLAN.md — Wave 0 reconciliation + compose/env scaffolds + capacity gate (Pitfall 1/2/4 fixes: network intra, new DB not new schema, edge certResolver letsencrypt)
+- [x] 10-02-PLAN.md — Postgres prod databases + dashboard better-auth migrations (bootstrap-postgres.sh + migrate-dashboard.sh)
+- [x] 10-03-PLAN.md — Edge Traefik file-provider entry + Cloudflare DNS records (ai-gateway-prod.yml + cf-dns-create.sh)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 10-04-PLAN.md — RUNBOOK-DEPLOY + REQUIREMENTS remap + ROADMAP Phase 11 placeholder (PRD-04 partial; D-16 split)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 10-05-PLAN.md — develop→main promotion + v1.0.0 tag + GHA build verify (cut-release.sh + 10-05-RELEASE-CHECKLIST.md)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 10-06-PLAN.md — HUMAN-UAT (autonomous: false; deploy + 8 smoke scenarios S1-S8 + S9 per-tenant + S10 rollback + S11 Sentry + 4 cascade-close commits)
+
+### Phase 11: prod-hardening
+
+**Goal:** Endurecer prod pós-Phase 10 — PRD-01 load test 30min sustained com SLO v1.0 D-04, PRD-02 chaos primary kill (Vast API DELETE), PRD-03 chaos OpenRouter DROP egress (iptables on n8n-ia-vm), PRD-04 RUNBOOK-INCIDENTS.md (4 classes D-11) + POSTMORTEM-TEMPLATE.md (Google SRE blameless 9-section), PRD-05 LGPD signoff doc-only deliverables, PRD-06 dashboard SSO hardening (better-auth twoFactor + rateLimit + allowlist + session 30min). Fold Phase 10 deferred items (D-18.1..D-18.4) e separação per-env keys (D-19).
+**Requirements:** PRD-01, PRD-02, PRD-03, PRD-04 (full), PRD-05, PRD-06
+**Depends on:** Phase 10
+**Plans:** 7/10 plans complete (passed_partial; 11-06/07/08 live UATs deferred — see 11-VERIFICATION.md carry-forward tech debt)
+
+Plans:
+
+**Wave 1**
+
+- [x] 11-01-PLAN.md — Wave 1: PRD-01 load-test scaffolding (audit-log-export.py + load-replay.py + load-replay-report-schema.json + .gitignore)
+- [x] 11-02-PLAN.md — Wave 1: PRD-06 dashboard SSO hardening (twoFactor + rateLimit + allowlist + session expiresIn=30min + 2FA enroll/challenge UI + BLOCKING migrate)
+- [x] 11-03-PLAN.md — Wave 1: PRD-05 LGPD signoff docs (LGPD-SIGNOFF-PROCESS.md + LGPD-SIGNOFF-LETTER-TEMPLATE.md)
+- [x] 11-04-PLAN.md — Wave 1: Phase 10 fold D-18.1..D-18.3 (gatewayctl debug emit-error + key list + smoke-sensitive-failover race fix)
+- [x] 11-05-PLAN.md — Wave 1: D-19 per-env upstream keys + D-18.4 GHA retrigger doc + scripts/dashboard/seed-admins.sh
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 11-06-PLAN.md — Wave 2: PRD-01 30-min sustained load-test live UAT (Vast 2×3090 primary UP; ~$1-3 spend)
+- [ ] 11-07-PLAN.md — Wave 2: PRD-02 chaos primary kill live UAT (Vast API DELETE; ~$0.30 spend)
+- [ ] 11-08-PLAN.md — Wave 2: PRD-03 chaos OpenRouter iptables DROP live UAT (sensitive 503 + normal fallthrough + cleanup)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 11-09-PLAN.md — Wave 3: PRD-04 RUNBOOK-INCIDENTS.md (4 classes D-11) + POSTMORTEM-TEMPLATE.md (Google SRE blameless 9-section)
+- [x] 11-10-PLAN.md — Wave 3: HUMAN-UAT S1..S8 + 11-VERIFICATION.md final phase rollup + STATE/ROADMAP advance
+
 ---
 
 ### Phase 06.9: OpenRouter model-rewrite per-upstream — close Phase 03 SC-1 fallback chain (INSERTED, promoted from SEED-004)

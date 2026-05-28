@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-last_updated: "2026-05-25T23:03:03.517Z"
+last_updated: "2026-05-28T01:46:15.245Z"
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_phases: 4
+  completed_phases: 3
+  total_plans: 28
+  completed_plans: 24
+  percent: 75
 ---
 
 # STATE: ifix-ai-gateway
@@ -27,7 +27,7 @@ progress:
 
 ## Current Position
 
-Phase: 06.9
+Phase: 11
 Plan: Not started
 Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questions in ROADMAP: embed CPU host, TTS server shim vs community wrapper, voice-cloning workflow, tts tier-0 role). Engine decided: Kani-TTS-2-pt (Apache 2.0, PT-BR, 3 GB VRAM, zero-shot voice clone).
 
@@ -179,6 +179,7 @@ Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questi
 |---|-------------|------|--------|-----------|
 | 260515-ayc | Fix STATE.md corruption (heading `## Current Position` duplicado injetado no meio do Phase 6.5 bullet) | 2026-05-15 | f44cf11 | [260515-ayc-fix-state-md-corruption-linha-40-42-tem-](./quick/260515-ayc-fix-state-md-corruption-linha-40-42-tem-/) |
 | 260516-rym | Fix handleForceProvision não trata FSM em cooldown — pod Vast.ai órfão queimava $$ quando operator force-provision após falha. Precheck FSM.State() + SetState(EmergencyProvisioning) em vez de 2x Transition. +2 regression tests. | 2026-05-16 | 5aec0eb | [260516-rym-fix-force-provision-cooldown-transition](./quick/260516-rym-fix-force-provision-cooldown-transition/) |
+| 260527-wgs | Fix primary reconciler silent-exit on transient ErrInstanceNotFound. waitForReadyOrDestroy now uses 3-strike confirm pattern + BestEffortDestroy on confirmed terminal (orphan Vast pod prevention). +2 regression subtests. Closes carry-forward critical bug from .planning/debug/primary-reconciler-silent-hang.md; unblocks Phase 11 11-06/07 live UATs. | 2026-05-27 | 01e7558 | [260527-wgs-fix-primary-reconciler-silent-terminal](./quick/260527-wgs-fix-primary-reconciler-silent-terminal/) |
 | Phase 06.7 P02 | 10m | 2 tasks | 7 files |
 | Phase 06.7 P03 | 25m | 2 tasks | 9 files |
 | Phase 06.7 P04 | ~20m | 2 tasks | 8 files |
@@ -186,7 +187,7 @@ Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questi
 
 ## Session Continuity
 
-- **Last session:** 2026-05-20T21:20:02Z
+- **Last session:** 2026-05-27T09:57:55.532Z
 - **Next session should:** Run the Phase 06.7 live HUMAN-UAT. Plan 06.7-09 Task 1 is DONE (commit `41039b4`: `docs/RUNBOOK-PRIMARY-POD-TTS.md` + `06.7-HUMAN-UAT.md` 6-scenario sheet + CLEANUP). **Task 2 is a BLOCKING human-verify checkpoint** — operator must run S1–S6 + cleanup on a live Vast 5090 (real GPU spend; autonomous mode cannot satisfy it), sign each PASS/FAIL, record spend. After all 6 + cleanup are signed: write `06.7-09-SUMMARY.md` + `06.7-VERIFICATION.md`, then `state advance-plan`. Any FAIL → `/gsd:plan-phase 06.7 --gaps`. Phase 06.7 Plan stays at 9 (06.7-09) — NOT advanced (plan incomplete until UAT signed).
 
 ---

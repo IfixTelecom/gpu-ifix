@@ -1299,6 +1299,19 @@ func buildRouter(log *slog.Logger, startedAt time.Time, verifier *auth.Verifier,
 		if px.adminAuditHandler != nil {
 			adminRouter.Method(http.MethodGet, "/audit", px.adminAuditHandler)
 		}
+		// Phase 11 Plan 04 D-18.2 — operator-only synthetic panic emitter
+		// used by `gatewayctl debug emit-error` to prove the
+		// httpx.Recoverer + sentry.CurrentHub().Recover + sentry.Flush
+		// path end-to-end in PROD. The route lives INSIDE the admin
+		// sub-router so admin.Middleware (X-Admin-Key) is enforced before
+		// the handler. httpx.Recoverer is applied globally at r.Use above
+		// (line ~1152), so the effective wrap order is
+		// Recoverer(adminMiddleware(DebugPanicHandler)) — Recoverer
+		// outermost. An automated integration test in
+		// gateway/internal/admin/debug_panic_test.go enforces both
+		// invariants (unauth -> 401 AND auth -> 500 sanitized).
+		adminRouter.Method(http.MethodPost, "/debug/panic",
+			admin.DebugPanicHandler(log))
 		r.Mount("/admin", adminRouter)
 	}
 
@@ -1470,10 +1483,16 @@ func bootstrapAdminKey(ctx context.Context, pool *pgxpool.Pool, bootstrap string
 		return fmt.Errorf("bcrypt bootstrap key: %w", err)
 	}
 	// Preview suffix (last 4 chars) — displayed in admin UI + audit.
-	suffix := bootstrap
-	if len(bootstrap) >= 4 {
-		suffix = bootstrap[len(bootstrap)-4:]
+	// WR-07: refuse to bootstrap when the operator passed a key shorter
+	// than 4 chars. The pre-fix fallback `suffix := bootstrap` would
+	// concatenate the FULL plaintext key into key_prefix (stored in
+	// ai_gateway.admin_keys AND emitted via log.Info), leaking the
+	// entire key to the structured log sink. While a 1-3 char key is
+	// already a deployment error, refuse-and-explain is the right defense.
+	if len(bootstrap) < 4 {
+		return fmt.Errorf("bootstrap admin key too short (got %d chars; need >= 16; the suffix-display path would otherwise leak the full plaintext into key_prefix)", len(bootstrap))
 	}
+	suffix := bootstrap[len(bootstrap)-4:]
 	if _, err := q.InsertAdminKey(ctx, gen.InsertAdminKeyParams{
 		KeyLookupHash: sum[:],
 		KeyHash:       string(bcryptHash),
