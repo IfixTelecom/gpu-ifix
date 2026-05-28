@@ -29,7 +29,7 @@ All 5 sub-checks from 11-01 deliverables PASS:
 
 ## Task 06-02 Fixture Validation (PARTIAL — synthesized due to dev gateway low traffic)
 
-Real audit_log export from `bd_ai_gateway.ai_gateway.audit_log`:
+Real audit_log export from `bd_ai_gateway_prod.ai_gateway.audit_log` (NOTE: initial probe used legacy `bd_ai_gateway` DB — confirmed false target via debug session `audit-pipeline-silent-since-2026-05-25.md`; numbers below are still valid for the dev-gateway-traffic-volume observation):
 - Window: 2026-04-19T00:00Z → 2026-05-26T00:00Z (entire 5-week gateway lifetime)
 - Total rows: 201 (10 dropped — system rows without tenant_slug)
 - Tenants present: converseai-uat (155), converseai (32), uat02-test (14)
@@ -135,7 +135,7 @@ Zero raw API keys, Authorization headers, request bodies, response bodies, DSNs,
 
 1. **Primary reconciler silent hang post-offer-pick** (NEW, CRITICAL). When `provisionLifecycle` is invoked via force-up event, the path between offer-pick log and lifecycle-DB-INSERT silently stops. Vast instance gets created (so reconciler DID call Vast API and got success) but no DB row, no further logs, FSM never advances. Needs source-level debug: add tracing between offer-pick and lifecycle.Insert; suspect goroutine deadlock or unwrapped error in `gateway/internal/primary/lifecycle.go` provision path. Operator workaround until fix: monitor Vast UI directly + manual destroy when FSM hangs.
 
-2. **Dev gateway low traffic** (KNOWN). `audit_log` accumulates only 201 rows over 5 weeks → fixture x32 synthesis used. Re-run 11-06 once prod tenants (converseai, chat-ifix, telefonia, cobrancas, campanhas, voice-api) generate ≥1000 rows in a 1-hour window.
+2. **Dev gateway low traffic** (KNOWN). `audit_log` in legacy `bd_ai_gateway` accumulates only 201 rows over 5 weeks → fixture x32 synthesis used. Re-run 11-06 once prod tenants (converseai, chat-ifix, telefonia, cobrancas, campanhas, voice-api) generate ≥1000 rows in a 1-hour window. NOTE: prod traffic now lands in `bd_ai_gateway_prod` (post-Phase 10 cutover) — re-export against the new DB once volume is sufficient.
 
 3. **n8n-ia-vm Phase 06.7 config drift** (RESOLVED 2026-05-27T22:00Z). 13 env vars (WEIGHTS_*, PRIMARY_*_SHA256, UPSTREAM_TTS_*, PRIMARY_TEMPLATE_IMAGE, PRIMARY_HOST_ID) missing on n8n-ia-vm prod stack `.env`. Appended from vps-ifix-vm dev `.env` reference. Add a deploy preflight gate (scripts/deploy/preflight.sh from 11-05) that diffs stack .env against expected-key list per phase milestone.
 

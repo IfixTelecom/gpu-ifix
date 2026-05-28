@@ -113,25 +113,39 @@ on plan 11-06 destroyed the orphan). Smoke confirmed tier-0 OPEN state via
 
 Smoke ran to completion without hanging on FORCED_OPEN polling — the 11-04 D-18.1 fix (`OPEN_LIKE_STATES = frozenset({"open", "forced-open", "FORCED_OPEN"})` + defensive asserts in commit ce2483d) is exercised live. Pre-fix the smoke would have looped forever waiting for the polling rendezvous between gatewayctl breaker state output and the local-llm probe loop.
 
-## Pre-existing CRITICAL bug — audit pipeline silent
+## Audit pipeline initial diagnosis CORRECTED — diagnostic target mismatch (2026-05-28T02:53Z)
+
+**Original claim:** "Gateway has not written audit_log rows since 2026-05-25" was a **FALSE POSITIVE** caused by querying the legacy `bd_ai_gateway` DB instead of the prod-cutover `bd_ai_gateway_prod` DB. Phase 10-02 `bootstrap-postgres.sh` migrated the prod gateway to `bd_ai_gateway_prod`; the smoke-driven drill-down + my initial EVIDENCE notes both pointed at the stale `bd_ai_gateway` (frozen since the pre-cutover handoff 2026-05-25 22:50:50Z).
+
+**Re-verification against correct DB (`bd_ai_gateway_prod`):**
 
 ```
-SELECT MAX(ts) FROM ai_gateway.audit_log;
-  → 2026-05-25 22:50:50.457542+00  (2+ days stale)
+SELECT MAX(ts),COUNT(*) FROM ai_gateway.audit_log;
+  → 2026-05-28 01:26:22.235945+00 | 99 rows
 ```
 
-Gateway has **not written a single audit_log row since 2026-05-25**. This breaks:
-- PRD-04 incident-response runbook traceability (every class in RUNBOOK-INCIDENTS.md assumes audit_log evidence)
-- RES-08 audit_decision invariant verification (Segment B audit_decision gate fails for this reason)
-- D-04 SLO observability (no per-route per-upstream histogram source)
+Audit pipeline is healthy + writing continuously. Debug report: `.planning/debug/audit-pipeline-silent-since-2026-05-25.md` (committed `f905e81`, status `root_cause_found` → false-alarm).
 
-Suspected causes (each requires source debug; deferred):
-1. Gateway audit writer Postgres connection mis-configured on n8n-ia-vm prod stack
-2. Audit batch flush failing silently (no error log line visible in `docker logs`)
-3. Audit writer pointing at wrong DB (bd_ai_dashboard_* instead of bd_ai_gateway after dashboard migration)
-4. ai_gateway_app role lost INSERT grant on partitioned table after 2026-05-25
+**Real residual issue surfaced by Segment B re-run with correct DSN:**
 
-This blocker also impacts plan 11-06 baseline (no audit_log data means audit-log-export.py exports zero rows for any window after 2026-05-25 — which we confirmed empirically with 201 rows max window 2026-04-19 → 2026-05-25).
+```
+audit_log_row_found:        true  ✓ (audit pipeline writes the row)
+audit_log_content_rows:     0     ✓ (sensitive content NOT stored per RES-08)
+audit_upstream:             "llm" ✗ (smoke expects "blocked_sensitive")
+```
+
+Gateway's audit instrumentation tags the sensitive-block 503 response with `upstream='llm'` (the role default) instead of the contract-required `upstream='blocked_sensitive'`. This is a Phase 9 / RES-08 instrumentation gap — the RES-08 invariant itself is enforced (sensitive returns 503 + zero content rows) but the audit label is missing.
+
+**Impact narrowed:**
+
+- PRD-04 incident-response runbook traceability: **NOT impacted** (audit_log rows exist for forensic queries; only the `upstream='blocked_sensitive'` label is missing — operators can still drill down by `data_class='sensitive' AND status_code=503`).
+- Segment B audit_decision + never_external gates: still FAIL until gateway sets the correct label.
+- D-04 SLO observability: **NOT impacted** (per-route per-upstream histograms work; sensitive-block rows just show under the `llm` upstream bucket instead of a dedicated `blocked_sensitive` bucket).
+- Plan 11-06 baseline: **NOT impacted** by audit gap (the 11-06 blocker is the limited dev gateway traffic volume — orthogonal).
+
+**Recommended fix (not applied in this session, follow-up phase):**
+
+Gateway sensitive-block proxy path (`gateway/internal/proxy/` or equivalent) should set `audit.Event{Upstream: "blocked_sensitive"}` on the audit-write call for the RES-08 503 path. Single label change, ~3 LOC + 1 unit test. After fix, re-run Segment B → expect 4/4 PASS without any source changes to the smoke.
 
 ## Artifact: scripts/chaos/openrouter-iptables-drop.sh
 
@@ -182,6 +196,10 @@ returns 0 matches (verified manually before commit).
 
 ## Carry-forward tech debt
 
-1. **Audit pipeline silent since 2026-05-25** (NEW CRITICAL, surfaced by Segment B audit_decision gate). Blocks PRD-04 traceability + Segment B never_external gate + 11-06 baseline export.
+1. ~~**Audit pipeline silent since 2026-05-25** (NEW CRITICAL)~~ **REFUTED 2026-05-28T02:53Z** — diagnostic target mismatch (queried `bd_ai_gateway` instead of `bd_ai_gateway_prod`). Audit pipeline is healthy.
 
-2. **Initial-DROP-loop log gap** (LOW). Only first per-IP rule logs the "DROP installed for X" line; subsequent IPs install correctly but skip the log line. Cosmetic, fix in script's read-loop in next iteration.
+2. **Audit `upstream='blocked_sensitive'` label missing on RES-08 503 path** (NEW MEDIUM, surfaced by Segment B re-run with correct DSN). Gateway writes `upstream='llm'` for sensitive-block rows; smoke spec contract expects `upstream='blocked_sensitive'`. Single label change in `gateway/internal/proxy/` sensitive-block path. ~3 LOC + 1 unit test. Re-run Segment B post-fix → 4/4 PASS.
+
+3. **Initial-DROP-loop log gap** (LOW). Only first per-IP rule logs the "DROP installed for X" line; subsequent IPs install correctly but skip the log line. Cosmetic, fix in script's read-loop in next iteration.
+
+4. **Operator-runbook DSN clarity** (LOW). Phase 11 docs + scripts should be explicit about the `bd_ai_gateway_prod` dbname (post-Phase 10 cutover) to prevent future false-positive diagnostics like this one.

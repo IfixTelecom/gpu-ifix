@@ -20,9 +20,12 @@ status_flip_rationale: |
   sheet + VERIFICATION + advances STATE to passed_partial. Phase 11 GOAL
   achieved at the artifact level (load-test infrastructure + dashboard SSO +
   LGPD docs + Phase 10 fold + per-env keys + RUNBOOK-INCIDENTS suite live);
-  3 live UATs remain (11-06 + 11-07 + 11-08 Segment B audit gate) blocked on
-  2 carry-forward tech-debt items (primary reconciler silent-hang + audit
-  pipeline silent since 2026-05-25).
+  3 live UATs remain (11-06 + 11-07 + 11-08 Segment B audit_decision/never_external
+  label gate). Tech-debt resolutions in-session: primary reconciler silent-hang
+  RESOLVED via quick 260527-wgs (commit 01e7558); audit-pipeline-silent claim
+  REFUTED as diagnostic target mismatch (correct DB is `bd_ai_gateway_prod`,
+  not legacy `bd_ai_gateway`). Remaining open: single medium-severity audit
+  label gap (`upstream='blocked_sensitive'` on RES-08 503 path, ~3 LOC fix).
 prds_status:
   PRD-01: passed_partial   # infra shipped (11-01); 30-min sustained live UAT deferred (11-06 blocked)
   PRD-02: passed_partial   # chaos script shipped (11-07); live exec deferred (depends_on 11-06)
@@ -39,26 +42,47 @@ d19_status: passed         # per-env upstream key separation shipped (11-05); se
 carry_forward_tech_debt:
   - id: primary-reconciler-silent-hang
     severity: critical
+    resolved_in_session: true
+    resolved_at: 2026-05-28T02:15Z
+    resolved_via: quick 260527-wgs (commit 01e7558)
     surfaced_by: 11-06-EVIDENCE.md
-    fix_target: gateway/internal/primary/lifecycle.go
-    blocks: [11-06 live UAT, 11-07 live UAT]
+    fix_target: gateway/internal/primary/reconciler.go (waitForReadyOrDestroy ErrInstanceNotFound branch)
+    blocks: ~~[11-06 live UAT, 11-07 live UAT]~~ (unblocked post-fix)
     summary: |
-      Force-up picks Vast offer + creates instance, but no row written to
-      ai_gateway.primary_lifecycles, no further reconciler logs, FSM stuck
-      at provisioning forever. Source-debug needed; suspect goroutine
-      deadlock or unwrapped error between offer-pick and lifecycle.Insert.
-      Phase 11 11-06 burned $0.04 of orphan spend before manual destroy.
+      Reconciler closed lifecycle silently on a single transient
+      {"instances": null} from Vast (state-transition flap). FSM appeared
+      stuck but actually returned to asleep in 4m24s without log + without
+      BestEffortDestroy → orphan Vast pod burned $0.04 before manual
+      Vast API DELETE. Fix: 3-strike confirm pattern + log.Warn per strike
+      + BestEffortDestroy on confirmed terminal. +2 regression subtests.
+      Root cause report: .planning/debug/resolved/primary-reconciler-silent-hang.md.
   - id: audit-pipeline-silent-since-2026-05-25
-    severity: critical
-    surfaced_by: 11-08-EVIDENCE.md
-    fix_target: gateway audit writer (n8n-ia-vm prod stack)
-    blocks: [PRD-04 traceability, 11-06 baseline export, 11-08 Segment B audit_decision/never_external gates]
+    severity: ~~critical~~ false-alarm
+    resolved_in_session: true
+    resolved_at: 2026-05-28T03:00Z
+    resolved_via: diagnostic clarification (debug session refuted hypothesis)
+    surfaced_by: 11-08-EVIDENCE.md (initial false-positive)
+    fix_target: documentation only (operator DSN clarity)
+    blocks: []
     summary: |
-      SELECT MAX(ts) FROM ai_gateway.audit_log returns 2026-05-25 22:50:50.
-      Gateway has not written any audit row in 2+ days. Suspected causes:
-      writer Postgres connection mis-configured on n8n-ia-vm prod stack OR
-      audit batch flush failing silently OR audit writer pointing at wrong
-      DB OR ai_gateway_app role lost INSERT grant on partitioned table.
+      REFUTED — was a diagnostic target mismatch. Initial SELECT MAX(ts)
+      queried legacy `bd_ai_gateway` DB (frozen 2026-05-25 22:50:50 pre-cutover);
+      prod gateway writes to `bd_ai_gateway_prod` (post-Phase-10 cutover) and
+      audit pipeline is healthy + writing continuously (99 rows including
+      11-08 chaos probes). Root cause report at
+      .planning/debug/audit-pipeline-silent-since-2026-05-25.md.
+  - id: audit-blocked-sensitive-upstream-label-missing
+    severity: medium
+    surfaced_by: 11-08-EVIDENCE.md (Segment B re-run with correct DSN)
+    fix_target: gateway/internal/proxy/ sensitive-block path
+    blocks: [11-08 Segment B audit_decision + never_external gates (2/4)]
+    summary: |
+      Gateway writes upstream='llm' (role default) on RES-08 sensitive 503
+      rows instead of the smoke contract's expected upstream='blocked_sensitive'.
+      RES-08 invariant itself works (sensitive returns 503 + zero content).
+      Single label change in the sensitive-block proxy path. ~3 LOC + 1
+      unit test. After fix, re-run smoke-sensitive-failover.py against
+      bd_ai_gateway_prod → expect 4/4 PASS without source changes to smoke.
   - id: phase-067-env-drift-n8n-ia-vm
     severity: high
     resolved_in_session: true
