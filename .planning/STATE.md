@@ -179,6 +179,7 @@ Next autonomous-eligible work: Phase 06.7 — discuss-phase first (4 open questi
 |---|-------------|------|--------|-----------|
 | 260515-ayc | Fix STATE.md corruption (heading `## Current Position` duplicado injetado no meio do Phase 6.5 bullet) | 2026-05-15 | f44cf11 | [260515-ayc-fix-state-md-corruption-linha-40-42-tem-](./quick/260515-ayc-fix-state-md-corruption-linha-40-42-tem-/) |
 | 260516-rym | Fix handleForceProvision não trata FSM em cooldown — pod Vast.ai órfão queimava $$ quando operator force-provision após falha. Precheck FSM.State() + SetState(EmergencyProvisioning) em vez de 2x Transition. +2 regression tests. | 2026-05-16 | 5aec0eb | [260516-rym-fix-force-provision-cooldown-transition](./quick/260516-rym-fix-force-provision-cooldown-transition/) |
+| 260527-wgs | Fix primary reconciler silent-exit on transient ErrInstanceNotFound. waitForReadyOrDestroy now uses 3-strike confirm pattern + BestEffortDestroy on confirmed terminal (orphan Vast pod prevention). +2 regression subtests. Closes carry-forward critical bug from .planning/debug/primary-reconciler-silent-hang.md; unblocks Phase 11 11-06/07 live UATs. | 2026-05-27 | 01e7558 | [260527-wgs-fix-primary-reconciler-silent-terminal](./quick/260527-wgs-fix-primary-reconciler-silent-terminal/) |
 | Phase 06.7 P02 | 10m | 2 tasks | 7 files |
 | Phase 06.7 P03 | 25m | 2 tasks | 9 files |
 | Phase 06.7 P04 | ~20m | 2 tasks | 8 files |
