@@ -20,7 +20,7 @@
  */
 import { Clock } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,7 +33,37 @@ import {
 import { Input } from "@/components/ui/input";
 import { signIn } from "@/lib/auth-client";
 
+// Next.js 15.5 prerender requires useSearchParams callers to be wrapped in
+// Suspense so the static export can defer the query-string read to runtime.
+// Without this the `next build` Collecting-page-data step errors with
+// "useSearchParams() should be wrapped in a suspense boundary at page /login"
+// (CI: gh run 26568406942). The Suspense fallback renders an empty Card so
+// hydration matches the eventual filled form layout.
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginFallback() {
+  return (
+    <main className="flex min-h-screen items-center justify-center p-6">
+      <Card className="w-full max-w-sm">
+        <CardHeader>
+          <CardTitle>Gateway ifix-ai</CardTitle>
+          <CardDescription>
+            Painel de observabilidade — acesso restrito à equipe de operações.
+          </CardDescription>
+        </CardHeader>
+        <CardContent />
+      </Card>
+    </main>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const sessionExpired = params.get("session_expired") === "1";
