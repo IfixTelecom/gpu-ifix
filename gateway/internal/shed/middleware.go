@@ -268,7 +268,15 @@ func (d MiddlewareDeps) trackAndPass(w http.ResponseWriter, r *http.Request, nex
 	}()
 	ctx := auditctx.WithShedDecision(r.Context(), "passed")
 	obs.GatewayShedDecisions.WithLabelValues(upstream, "passed").Inc()
-	next.ServeHTTP(w, r.WithContext(ctx))
+	// Mutate the request in place so the audit middleware (which reads
+	// r.Context() AFTER next returns, using the same *http.Request
+	// pointer it captured upstream) observes any downstream context
+	// stamps — most importantly the proxy.dispatcher.writeSensitiveBlock
+	// upstream_override="blocked_sensitive". Using r.WithContext(ctx)
+	// here creates a new *http.Request and breaks that chain. Same
+	// pattern as Branches 10a/10b above and dispatcher.writeSensitiveBlock.
+	*r = *r.WithContext(ctx)
+	next.ServeHTTP(w, r)
 }
 
 // resolveCapForRole reads the role-specific cap from TenantConfig.
